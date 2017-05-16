@@ -35,7 +35,7 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
             slice_b = get_padded_stride(conv3_pool_r,i,j,height_8,width_8)
             current_layer = dotLayer([conv3_pool_l,slice_b])
             layer_list.append(current_layer)
-    return Lambda(lambda x: tf.concat(3,x),name='441_output_concatenation')(layer_list)
+    return Lambda(lambda x: tf.concat(x, 3),name='441_output_concatenation')(layer_list)
     
 
 def getModel(height = 384, width = 512):
@@ -66,6 +66,7 @@ def getModel(height = 384, width = 512):
     conv3_pool_l = MaxPooling2D(name='maxpool3_l')(conv3_l)
     conv3_pool_r = MaxPooling2D(name='maxpool3_r')(conv3_r)
 
+
     # merge
     add_layer = get_correlation_layer(conv3_pool_l, conv3_pool_r,max_displacement=20,stride2=2,height_8=height/8,width_8=width/8)
 
@@ -86,11 +87,34 @@ def getModel(height = 384, width = 512):
     imu_lstm = LSTM(4, name='imu_lstm')(input_imu)
 
     ## core LSTM
-
+    core_lstm = concatenate([flatten_image, imu_lstm])
+    core_lstm = Reshape((1, 49156))(core_lstm)
+    core_lstm = LSTM(6)(core_lstm)
 
     # whole model
-    model = Model(inputs = [input_l, input_r], outputs = flatten_image)
+    model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
     return model
+
+
+def readData():
+    imu_folder = '../'
+    img_folder = '../'
+
+    for i in xrange(19):
+        # read left image
+        
+        # read right image
+        
+        # read imu
+        img_file = img_folder + str(i)
+        with open(img_file) as f:
+            line = f.readline()
+            tmp = line.strip().split('')
+            imu_data = tmp[11:14] + tmp[17:20]
+
+
+def read_imu(filename):
+    file_object = open(filename, )
 
 
 if __name__ == '__main__':
@@ -98,3 +122,4 @@ if __name__ == '__main__':
     model.compile(optimizer='rmsprop', loss='mean_squared_error')
     model.summary()
     #model.fit({'pre_input': 0, 'nxt_input': 0}, {}, epochs=50, batch_size=32)
+
