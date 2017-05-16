@@ -15,10 +15,12 @@ import tensorflow as tf
 #from keras.utils.visualize_util import plot
 
 from scipy import misc
+from scipy.linalg import logm, expm
+
+NUM_INST = 10
 
 def myDot():
     return Lambda(lambda x: tf.reduce_sum(tf.multiply(x[0],x[1]),axis=-1,keep_dims=True),name = 'myDot')
-
 
 def get_padded_stride(b,displacement_x,displacement_y,height_8=384/8,width_8=512/8):
     slice_height = height_8- abs(displacement_y)
@@ -133,15 +135,23 @@ def readData():
             imu_lst.append(imu)
 
     ans_file = '../dat/test_data/poses/pose'
+    mat_lst = []
     with open(ans_file) as f:
-        lines = f.readlines()[1:11]
-        ans_lst = [line.strip().split(' ')[:6] for line in lines]
+        for line in f.readlines():
+            ans = map(float, line.strip().split(' '))
+            mat = np.reshape(ans + [0, 0, 0, 1], (4, 4))
+            mat_lst.append(np.matrix(mat))
 
+    ans_lst = []
+    for i in range(NUM_INST):
+        mat = np.linalg.inv(mat_lst[i]) * mat_lst[i+1]
+        w = logm(mat[:3, :3])
+        ans_lst.append([w[2,1], w[0,2], w[1,0]] + mat[:3, 3])
+        
     p_img_lst = np.array(p_img_lst)
     n_img_lst = np.array(n_img_lst)
     imu_lst = np.array(imu_lst)
     ans_lst = np.array(ans_lst)
-    print ans_lst.shape
     return p_img_lst, n_img_lst, imu_lst, ans_lst
 
 
@@ -151,6 +161,8 @@ if __name__ == '__main__':
     model.summary()
 
     p_img_lst, n_img_lst, imu_lst, ans_lst = readData()
+    '''
     model.fit({'pre_input': p_img_lst, 'nxt_input': n_img_lst, 'imu_input': imu_lst}, \
-            {'output': ans_lst}, epochs=1, batch_size=10)
+            {'output': ans_lst}, epochs=1, batch_size=1)
+    '''
 
