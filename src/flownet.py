@@ -1,3 +1,6 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+
 from keras.models import Model, Sequential
 from keras.layers import Activation, Input, Reshape, merge, Lambda, Dropout, Flatten, Dense,LSTM
 from keras.layers.merge import add,concatenate,dot
@@ -10,6 +13,9 @@ import keras.backend as K
 import numpy as np
 import tensorflow as tf
 #from keras.utils.visualize_util import plot
+
+from scipy import misc
+
 def myDot():
     return Lambda(lambda x: tf.reduce_sum(tf.multiply(x[0],x[1]),axis=-1,keep_dims=True),name = 'myDot')
 
@@ -43,8 +49,8 @@ def getModel(height = 384, width = 512):
     ## convolution model
 
     # left and model
-    input_l = Input(shape=(height, width, 3), name='pre_input')
-    input_r = Input(shape=(height, width, 3), name='nxt_input')
+    input_l = Input(shape=(height, width, 1), name='pre_input')
+    input_r = Input(shape=(height, width, 1), name='nxt_input')
     #layer 1
     conv1 = Convolution2D(64,(7,7), padding = 'same', name = 'conv1')
     conv1_l = conv1(input_l)
@@ -88,8 +94,8 @@ def getModel(height = 384, width = 512):
 
     ## core LSTM
     core_lstm = concatenate([flatten_image, imu_lstm])
-    core_lstm = Reshape((1, 49156))(core_lstm)
-    core_lstm = LSTM(6)(core_lstm)
+    core_lstm = Reshape((1, 97284))(core_lstm)
+    core_lstm = LSTM(6, name='output')(core_lstm)
 
     # whole model
     model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
@@ -97,29 +103,54 @@ def getModel(height = 384, width = 512):
 
 
 def readData():
-    imu_folder = '../'
-    img_folder = '../'
+    img_folder = '../dat/test_data/image_00/data/'
+    imu_folder = '../dat/test_data/oxts/data/'
 
-    for i in xrange(19):
-        # read left image
+    p_img_lst = []
+    n_img_lst = []
+    imu_lst = []
+
+    for i in xrange(10):
+        # read pre image
+        p_img_file = '%s%010d.png' % (img_folder, i)
+        p_img = misc.imread(p_img_file)
+        p_img = np.expand_dims(p_img, axis=2)
+        p_img_lst.append(p_img)
         
-        # read right image
+        # read nxt image
+        n_img_file = '%s%010d.png' % (img_folder, i+1)
+        n_img = misc.imread(n_img_file)
+        n_img = np.expand_dims(n_img, axis=2)
+        n_img_lst.append(n_img)
         
         # read imu
-        img_file = img_folder + str(i)
-        with open(img_file) as f:
+        imu_file = '%s%010d.txt' % (imu_folder, i)
+        with open(imu_file) as f:
             line = f.readline()
-            tmp = line.strip().split('')
-            imu_data = tmp[11:14] + tmp[17:20]
+            tmp = line.strip().split(' ')
+            imu = np.array(tmp[11:14] + tmp[17:20])
+            imu = np.expand_dims(imu, axis=0)
+            imu_lst.append(imu)
 
+    ans_file = '../dat/test_data/poses/pose'
+    with open(ans_file) as f:
+        lines = f.readlines()[1:11]
+        ans_lst = [line.strip().split(' ')[:6] for line in lines]
 
-def read_imu(filename):
-    file_object = open(filename, )
+    p_img_lst = np.array(p_img_lst)
+    n_img_lst = np.array(n_img_lst)
+    imu_lst = np.array(imu_lst)
+    ans_lst = np.array(ans_lst)
+    print ans_lst.shape
+    return p_img_lst, n_img_lst, imu_lst, ans_lst
 
 
 if __name__ == '__main__':
-    model = getModel()
+    model = getModel(height=375, width=1242)
     model.compile(optimizer='rmsprop', loss='mean_squared_error')
     model.summary()
-    #model.fit({'pre_input': 0, 'nxt_input': 0}, {}, epochs=50, batch_size=32)
+
+    p_img_lst, n_img_lst, imu_lst, ans_lst = readData()
+    model.fit({'pre_input': p_img_lst, 'nxt_input': n_img_lst, 'imu_input': imu_lst}, \
+            {'output': ans_lst}, epochs=1, batch_size=10)
 
