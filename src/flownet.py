@@ -1,6 +1,6 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
-
+from keras.engine.topology import Layer
 from keras.models import Model, Sequential
 from keras.layers import Activation, Input, Reshape, merge, Lambda, Dropout, Flatten, Dense,LSTM
 from keras.layers.merge import add,concatenate,dot
@@ -18,6 +18,210 @@ from scipy import misc
 from scipy.linalg import logm, expm
 
 NUM_INST = 10
+
+def batch_se3_to_skew_param(batch_se3_vector):
+    output = tf.slice(batch_se3_vector,[0,0],[-1,3],name='se3_to_skew_param')
+    return output
+
+def batch_se3_to_delta_position(batch_se3_vector):
+    output = tf.slice(batch_se3_vector,[0,3],[-1,3],name='se3_to_delta_position')
+    return output
+
+def batchSkewParamToSkewMatrix(skewParam):
+    ''' takes a (batch_size,3) set of skew parameters and returns
+     (batch_size,3,3) set of skew matrices'''
+    indices = tf.constant([[2,1], [0,2], [1,0],[1,2],[2,0],[0,1]])
+    # concatenate on the negatve of each skew parameter for easy indexing
+    batch_skew_params =  tf.concat([skewParam,-1*skewParam],1)
+    #transpose the parameters for scattering, using slices along the last dimension (the batch dimension)
+    updates = tf.transpose(batch_skew_params,[1,0])
+    shape = tf.shape(tf.expand_dims(tf.transpose(skewParam),axis=0)+tf.constant([0.0,0.0,0.0],shape=(3,1,1)))
+    scatter = tf.scatter_nd(indices, updates, shape)
+    outputs = K.permute_dimensions(scatter,[2,0,1])
+    return outputs
+
+def batchSkewParamToSO3(skewParam):
+    skewMatrix = batchSkewParamToSkewMatrix(skewParam)
+    eye3 = tf.diag(tf.ones([3]))
+    skewSumSquares = tf.reduce_sum(tf.square(skewParam),axis=1,keep_dims=True)
+    skewNorm = tf.sqrt(skewSumSquares)
+    a = tf.expand_dims(tf.sin(skewNorm)/skewNorm,axis=-1)
+    b = tf.expand_dims((1-tf.cos(skewNorm))/skewSumSquares,axis=-1)
+    skewMatrixSquare = tf.matmul(skewMatrix,skewMatrix)
+    result = eye3 + tf.multiply(a,skewMatrix) + tf.multiply(b,skewMatrixSquare)
+    return result
+    
+def loss_SO3(y_true,y_pred):
+    ''' assumes y_true is a batch_size x 3x3 matrix representing'''
+    y_true_transpose = K.permute_dimensions(y_true,[0,2,1])
+    small_world_errors = tf.matmul(y_true_transpose,y_pred)
+    small_z = tf.slice(small_world_errors,[0,0,1],[-1,1,1])
+    small_y = tf.slice(small_world_errors,[0,0,2],[-1,1,1])
+    small_x = tf.slice(small_world_errors,[0,1,2],[-1,1,1])
+    square_errors = K.square(K.stack([small_x,small_y,small_z]))
+    loss = K.mean(square_errors)
+    return loss
+
+def loss_angle_SE3(y_true,y_pred):
+    ''' assumes y_true is a batch_size x 4x4 matrix representing'''
+    y_true_inverse = tf.matrix_inverse(y_true)
+    small_world_errors = tf.matmul(y_true_inverse,y_pred)
+    small_z = tf.slice(small_world_errors,[0,0,1],[-1,1,1])
+    small_y = tf.slice(small_world_errors,[0,0,2],[-1,1,1])
+    small_x = tf.slice(small_world_errors,[0,1,2],[-1,1,1])
+    square_errors = K.square(K.stack([small_x,small_y,small_z]))
+    loss = K.mean(square_errors)
+    return loss
+
+def loss_position_SE3(y_true,y_pred):
+    ''' assumes y_true is a batch_size x 4x4 matrix representing the current SE3 transform from world reference frame to camera reference frame'''
+    y_pred_inverse = tf.matrix_inverse(y_pred)
+    small_world_errors = tf.matmul(y_pred_inverse,y_true)
+    small_x = tf.slice(small_world_errors,[0,0,3],[-1,1,1])
+    small_y = tf.slice(small_world_errors,[0,1,3],[-1,1,1])
+    small_z = tf.slice(small_world_errors,[0,2,3],[-1,1,1])
+    square_errors = K.square(K.stack([small_x,small_y,small_z]))
+    loss = K.mean(square_errors)
+    return loss
+    
+class SE3ExpansionLayer(Layer):
+    ''' Converts a 3x4 SE3 matrix to its 4x4 canonical representation by appending [0,0,0,1] to the bottom '''
+    def __init__(self, **kwargs):
+        '''initial_SE3 is either a tensor if stateful==False or a list of tensors if stateful==True'''
+        super(SE3ExpansionLayer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # No trainable weights, no problems
+        super(SE3ExpansionLayer, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, x):
+        batch_size = x.shape[0]
+        num_cols = 4
+        num_zeros = num_cols -1;
+        batch_array_shape = tf.shape(tf.reduce_sum(x,axis=1,keep_dims=True))
+        zero_zero_zero_one = tf.zeros(shape=batch_array_shape)+tf.constant(np.array([0.0]*int(num_zeros)+[1.0]),dtype=K.floatx(),shape=(1,1,num_cols))
+        output_tensor = tf.concat([x,zero_zero_zero_one],axis=1)
+        return output_tensor
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0],input_shape[1]+1,input_shape[2])
+    
+class SO3AccumulationLayer(Layer):
+    '''Accumulates SO3 matrices based on self.initial_SO3
+      Assumes inputs are size (batch_size,3,3)
+      retunrs (batch_size,3,3)
+      '''
+    def __init__(self, initial_SO3 = None,stateful=False,batch_size=None, **kwargs):
+        '''initial_SO3 is either a tensor if stateful==False or a list of tensors if stateful==True'''
+        self.stateful = stateful
+        self.batch_size = batch_size
+        if not stateful:
+            if initial_SO3 is None:
+                initial_SO3 = K.eye(3)
+            self.initial_SO3 = initial_SO3
+        else:
+            if initial_SO3 is None:
+                initial_SO3=[]
+                assert batch_size is not None
+                assert batch_size > 0
+                for i in len(batch_size):
+                    initial_SO3.append(K.eye(3))
+            self.initial_SO3 = initial_SO3
+        super(SO3AccumulationLayer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # No trainable weights, no problems
+        super(SO3AccumulationLayer, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, x):
+        if self.stateful:
+            output_list = []
+
+            for index in range(self.batch_size):
+                current_matrix = x[index]
+                prev_matrix = self.initial_SO3[index];
+                current_cumulative = current_matrix*prev_matrix
+                self.initial_SO3[index]  = current_cumulative
+                output_list.append(current_cumulative)
+            if(self.batch_size and self.batch_size > 0):
+                output_tensor = K.stack(output_list)
+            else:
+                output_tensor = K.stack([K.eye(4)])
+            return output_tensor
+        else:
+            output_list = []
+            prev_matrix = self.initial_SO3
+            for index in range(self.batch_size):
+                current_matrix = x[index]
+                current_cumulative = current_matrix*prev_matrix
+                prev_matrix = current_cumulative
+                output_list.append(current_cumulative)
+            if(self.batch_size and self.batch_size > 0):
+                output_tensor = K.stack(output_list)
+            else:
+                output_tensor = K.stack([K.eye(3)])
+            return output_tensor
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0],3,3)
+        
+class SE3AccumulationLayer(Layer):
+    '''Accumulates SE3 matrices based on self.initial_SE3
+      Assumes inputs are size (batch_size,4,4)
+      retunrs (batch_size,3,3)
+      '''
+    def __init__(self, initial_SE3 = None,stateful=False,batch_size=None, **kwargs):
+        '''initial_SE3 is either a tensor if stateful==False or a list of tensors if stateful==True'''
+        self.stateful = stateful
+        self.batch_size = batch_size
+        if not stateful:
+            if initial_SE3 is None:
+                initial_SE3 = K.eye(4)
+            self.initial_SE3 = initial_SE3
+        else:
+            if initial_SE3 is None:
+                initial_SE3=[]
+                assert batch_size is not None
+                assert batch_size > 0
+                for i in len(batch_size):
+                    initial_SE3.append(K.eye(4))
+            self.initial_SE3 = initial_SE3
+        super(SE3AccumulationLayer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # No trainable weights, no problems
+        super(SE3AccumulationLayer, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, x):
+        if self.stateful:
+            output_list = []
+            for index in range(self.batch_size):
+                current_matrix = x[index]
+                prev_matrix = self.initial_SE3[index];
+                current_cumulative = current_matrix*prev_matrix
+                self.initial_SE3[index]  = current_cumulative
+                output_list.append(current_cumulative)
+            if(self.batch_size and self.batch_size > 0):
+                output_tensor = K.stack(output_list)
+            else:
+                output_tensor = K.stack([K.eye(4)])
+            return output_tensor
+        else:
+            output_list = []
+            prev_matrix = self.initial_SE3
+            for index in range(self.batch_size):
+                current_matrix = x[index]
+                current_cumulative = current_matrix*prev_matrix
+                prev_matrix = current_cumulative
+                output_list.append(current_cumulative)
+            if(self.batch_size and self.batch_size > 0):
+                output_tensor = K.stack(output_list)
+            else:
+                output_tensor = K.stack([K.eye(4)])
+            return output_tensor
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0],4,4)
 
 def myDot():
     return Lambda(lambda x: tf.reduce_sum(tf.multiply(x[0],x[1]),axis=-1,keep_dims=True),name = 'myDot')
@@ -46,7 +250,7 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
     return Lambda(lambda x: tf.concat(x, 3),name='441_output_concatenation')(layer_list)
     
 
-def getModel(height = 384, width = 512):
+def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
     ## convolution model
 
@@ -54,7 +258,7 @@ def getModel(height = 384, width = 512):
     input_l = Input(shape=(height, width, 1), name='pre_input')
     input_r = Input(shape=(height, width, 1), name='nxt_input')
     #layer 1
-    conv1 = Convolution2D(64,(7,7), padding = 'same', name = 'conv1')
+    conv1 = Convolution2D(64,(7,7), batch_size=batch_size, padding = 'same', name = 'conv1')
     conv1_l = conv1(input_l)
     conv1_r = conv1(input_r)
     conv1_pool_l = MaxPooling2D(name='maxpool1_l')(conv1_l)
@@ -68,7 +272,7 @@ def getModel(height = 384, width = 512):
     conv2_pool_r = MaxPooling2D(name='maxpool2_r')(conv2_r)
 
     #layer 3
-    conv3 = Convolution2D(256, (5, 5), padding = 'same', name='conv3_l')
+    conv3 = Convolution2D(256, (5, 5), padding = 'same', name='conv3')
     conv3_l = conv3(conv2_pool_l)
     conv3_r = conv3(conv2_pool_r)
     conv3_pool_l = MaxPooling2D(name='maxpool3_l')(conv3_l)
@@ -97,10 +301,30 @@ def getModel(height = 384, width = 512):
     ## core LSTM
     core_lstm = concatenate([flatten_image, imu_lstm])
     core_lstm = Reshape((1, 97284))(core_lstm)
-    core_lstm = LSTM(6, name='output')(core_lstm)
+    core_lstm = LSTM(6,batch_size=batch_size, name='output')(core_lstm)
+    
+    # Handle frame-to-frame se3 outputs
+    skew_vector = Lambda(batch_se3_to_skew_param,name='skew_param')(core_lstm)
+    
+    position_vector = Lambda(batch_se3_to_delta_position,name='se3_v')(core_lstm)
+    
+    # generate frame-to-frame SE3 outputs
+    SO3_matrix = Lambda(batchSkewParamToSO3,name='SO3_matrix')(skew_vector)
+    position_matrix = Reshape((3,1),name='position_matrix')(position_vector)
+    SE3_delta_3x4 = concatenate([SO3_matrix,position_matrix],axis=2,name='SE3_delta_3x4')
+    current_SE3_delta = SE3ExpansionLayer(name='SE3_delta_4x4')(SE3_delta_3x4)
+    
+    # accumulate SE3_deltas into a current SE3
+    SE3 = SE3AccumulationLayer(name='SE3_accumulation',batch_size=batch_size)(current_SE3_delta)
 
     # whole model
-    model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
+    output_list = [skew_vector,position_vector]
+    loss_list = ['mean_squared_error','mean_squared_error']
+    if(use_SE3):
+        output_list += [SE3,SE3]
+        loss_list += [loss_angle_SE3,loss_position_SE3]
+    model = Model(inputs = [input_l, input_r, input_imu], outputs = output_list)
+    model.compile(optimizer='rmsprop',loss=loss_list)
     return model
 
 
@@ -156,8 +380,8 @@ def readData():
 
 
 if __name__ == '__main__':
-    model = getModel(height=375, width=1242)
-    model.compile(optimizer='rmsprop', loss='mean_squared_error')
+    batch_size = 32
+    model = getModel(height=375, width=1242,batch_size = batch_size,use_SE3 =  True)
     model.summary()
 
     p_img_lst, n_img_lst, imu_lst, ans_lst = readData()
