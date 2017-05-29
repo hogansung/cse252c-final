@@ -83,8 +83,8 @@ def loss_angle_SE3(y_true,y_pred):
 
 def loss_position_SE3(y_true,y_pred):
     ''' assumes y_true is a batch_size x 4x4 matrix representing the current SE3 transform from world reference frame to camera reference frame'''
-    y_pred_inverse = tf.matrix_inverse(y_pred)
     y_true_inverse = tf.matrix_inverse(y_true)
+    y_pred_inverse = tf.matrix_inverse(y_pred)
     small_world_errors = y_pred_inverse-y_true_inverse;
     small_x = tf.slice(small_world_errors,[0,0,3],[-1,1,1])
     small_y = tf.slice(small_world_errors,[0,1,3],[-1,1,1])
@@ -149,7 +149,7 @@ class SO3AccumulationLayer(Layer):
             for index in range(self.batch_size):
                 current_matrix = x[index]
                 prev_matrix = self.initial_SO3[index];
-                current_cumulative = current_matrix*prev_matrix
+                current_cumulative = tf.matmul(current_matrix,prev_matrix)
                 self.initial_SO3[index]  = current_cumulative
                 output_list.append(current_cumulative)
             if(self.batch_size and self.batch_size > 0):
@@ -162,7 +162,7 @@ class SO3AccumulationLayer(Layer):
             prev_matrix = self.initial_SO3
             for index in range(self.batch_size):
                 current_matrix = x[index]
-                current_cumulative = current_matrix*prev_matrix
+                current_cumulative = tf.matmul(current_matrix,prev_matrix)
                 prev_matrix = current_cumulative
                 output_list.append(current_cumulative)
             if(self.batch_size and self.batch_size > 0):
@@ -207,7 +207,7 @@ class SE3AccumulationLayer(Layer):
             for index in range(self.batch_size):
                 current_matrix = x[index]
                 prev_matrix = self.initial_SE3[index];
-                current_cumulative = current_matrix*prev_matrix
+                current_cumulative = tf.matmul(current_matrix,prev_matrix)
                 self.initial_SE3[index]  = current_cumulative
                 output_list.append(current_cumulative)
             if(self.batch_size and self.batch_size > 0):
@@ -220,7 +220,7 @@ class SE3AccumulationLayer(Layer):
             prev_matrix = self.initial_SE3
             for index in range(self.batch_size):
                 current_matrix = x[index]
-                current_cumulative = current_matrix*prev_matrix
+                current_cumulative = tf.matmul(current_matrix,prev_matrix)
                 prev_matrix = current_cumulative
                 output_list.append(current_cumulative)
             if(self.batch_size and self.batch_size > 0):
@@ -297,22 +297,26 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
     conv3_1 = Convolution2D(256, (3, 3), padding = 'same', name='conv3_1')(add_layer)
     conv4 = Convolution2D(512, (3, 3), padding = 'same', name='conv4')(conv3_1)
     conv4 = MaxPooling2D(name='maxpool4')(conv4)
+    height_16 = height/16; width_16 = width/16
     conv4_1 = Convolution2D(512, (3, 3), padding = 'same', name='conv4_1')(conv4)
     conv5 = Convolution2D(512, (3, 3), padding = 'same', name='conv5')(conv4_1)
     conv5 = MaxPooling2D(name='maxpool5')(conv5)
+    height_32 = height_16/2; width_32 = width_16/2
     conv5_1 = Convolution2D(512, (3, 3), padding = 'same', name='conv5_1')(conv5)
     conv6 = Convolution2D(1024, (3, 3), padding = 'same', name='conv6')(conv5_1)
     conv6 = MaxPooling2D(name='maxpool6')(conv6)
+    height_64 = height_32/2; width_64 = width_32/2
     flatten_image = Flatten()(conv6)
 
     ## inertial model
     input_imu = Input(shape=(10, 6), name='imu_input')
-    imu_lstm = LSTM(4, name='imu_lstm')(input_imu)
+    imu_output_width = 4
+    imu_lstm = LSTM(imu_output_width, name='imu_lstm')(input_imu)
 
     ## core LSTM
     core_lstm = concatenate([flatten_image, imu_lstm])
 
-    core_lstm = Reshape((1, 49156))(core_lstm) # 384 * 512
+    core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
     # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
     core_lstm = LSTM(6,batch_size=batch_size, name='output')(core_lstm)
     
@@ -532,7 +536,7 @@ def loadGrndTruth(batch_size = 32):
 
 
 if __name__ == '__main__':
-	batch_size = 1
+	batch_size = 32
 	model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  True)
 	#print model.metrics_names
 	# model.summary()
