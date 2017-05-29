@@ -84,7 +84,8 @@ def loss_angle_SE3(y_true,y_pred):
 def loss_position_SE3(y_true,y_pred):
     ''' assumes y_true is a batch_size x 4x4 matrix representing the current SE3 transform from world reference frame to camera reference frame'''
     y_pred_inverse = tf.matrix_inverse(y_pred)
-    small_world_errors = tf.matmul(y_pred_inverse,y_true)
+    y_true_inverse = tf.matrix_inverse(y_true)
+    small_world_errors = y_pred_inverse-y_true_inverse;
     small_x = tf.slice(small_world_errors,[0,0,3],[-1,1,1])
     small_y = tf.slice(small_world_errors,[0,1,3],[-1,1,1])
     small_z = tf.slice(small_world_errors,[0,2,3],[-1,1,1])
@@ -230,6 +231,8 @@ class SE3AccumulationLayer(Layer):
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0],4,4)
+    def set_initial_SE3(self,initial_SE3):
+        self.initial_SE3 = initial_SE3
 
 def myDot():
     return Lambda(lambda x: tf.reduce_sum(tf.multiply(x[0],x[1]),axis=-1,keep_dims=True),name = 'myDot')
@@ -640,7 +643,11 @@ if __name__ == '__main__':
 	for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
 		loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
 		loadGrndTruth(batch_size = batch_size)):
+		initial_train_SE3 = K.constant(target[-1][0])
+		model.layers[-1].set_initial_SE3(initial_train_SE3);
 		model.train_on_batch(x=[left_image, right_image, imu], y=target)
+		initial_test_SE3 = K.constant(test_target[-1][0])
+		model.layers[-1].set_initial_SE3(initial_test_SE3);
 		score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target)
 
 		print "score: " + str(score)
