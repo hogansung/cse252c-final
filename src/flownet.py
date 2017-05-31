@@ -322,12 +322,13 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
     core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
     # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-    core_lstm = LSTM(6,batch_size=batch_size, name='output')(core_lstm)
+    core_lstm = LSTM(2000,batch_size=batch_size, name='output')(core_lstm)
+    core_lstm_output = Dense(6)(core_lstm)
     
     # Handle frame-to-frame se3 outputs
-    skew_vector = Lambda(batch_se3_to_skew_param,name='skew_param')(core_lstm)
+    skew_vector = Lambda(batch_se3_to_skew_param,name='skew_param')(core_lstm_output)
     
-    position_vector = Lambda(batch_se3_to_delta_position,name='se3_v')(core_lstm)
+    position_vector = Lambda(batch_se3_to_delta_position,name='se3_v')(core_lstm_output)
     
     # generate frame-to-frame SE3 outputs
     SO3_matrix = Lambda(batchSkewParamToSO3,name='SO3_matrix')(skew_vector)
@@ -471,7 +472,29 @@ def loadImu(batch_size = 32):
         data = data.reshape((-1, 10, 6))
         print "imu shape:" + str(data.shape)
         yield data
-
+def pqToM(p,q):
+    qr = float(q[0])
+    qi = float(q[1])
+    qj = float(q[2])
+    qk = float(q[3])
+    M = np.zeros([4,4])
+    M[0,0] = 1 - 2*qj*qj - 2*qk*qk
+    M[1,0] = 2*(qi*qj+qk*qr)
+    M[2,0] = 2*(qi*qk-qj*qr)
+    M[3,0] = 0
+    M[0,1] = 2*(qi*qj-qk*qr)
+    M[1,1] = 1-2*qi*qi-2*qk*qk
+    M[2,1] = 2*(qi*qr+qj*qk)
+    M[3,1] = 0
+    M[0,2] = 2*(qi*qk+qj*qr)
+    M[1,2] = 2*(qj*qk-qi*qr)
+    M[2,2] = 1-2*(qi*qi+qj*qj)
+    M[3,2] = 0
+    M[0,3] = float(p[0])
+    M[1,3] = float(p[1])
+    M[2,3] = float(p[2])
+    M[3,3] = 1
+    return M
 ## ground truth generator
 def loadGrndTruth(batch_size = 32):
     grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
@@ -480,6 +503,7 @@ def loadGrndTruth(batch_size = 32):
     q1 = np.array(gndTurth_raw[[5,6,7,8]])
     #size = p1.shape[0]
     size = 30
+    M_initial = np.linalg.inv(pqToM(p1[0],q1[0]))
     index = [ind for ind in xrange(size) if ind % 10 == 9]
     Ms = []
     if (len(index) % batch_size == 0):
@@ -494,27 +518,9 @@ def loadGrndTruth(batch_size = 32):
         vs = []
         M_invs = []
         for idx in xrange(p.shape[0]):
-            qr = float(q[idx][0])
-            qi = float(q[idx][1])
-            qj = float(q[idx][2])
-            qk = float(q[idx][3])
-            M = np.zeros([4,4])
-            M[0,0] = 1 - 2*qj*qj - 2*qk*qk
-            M[1,0] = 2*(qi*qj+qk*qr)
-            M[2,0] = 2*(qi*qk-qj*qr)
-            M[3,0] = 0
-            M[0,1] = 2*(qi*qj-qk*qr)
-            M[1,1] = 1-2*qi*qi-2*qk*qk
-            M[2,1] = 2*(qi*qr+qj*qk)
-            M[3,1] = 0
-            M[0,2] = 2*(qi*qk+qj*qr)
-            M[1,2] = 2*(qj*qk-qi*qr)
-            M[2,2] = 1-2*(qi*qi+qj*qj)
-            M[3,2] = 0
-            M[0,3] = float(p[idx][0])
-            M[1,3] = float(p[idx][1])
-            M[2,3] = float(p[idx][2])
-            M[3,3] = 1
+            currentQ = q[idx]
+            currentP = p[idx]
+            M = pqToM(currentP,currentQ)
             M_inv = np.linalg.inv(M)
             if (len(Ms) == 0):
                 M_last = M_inv
@@ -536,139 +542,151 @@ def loadGrndTruth(batch_size = 32):
         print "w shape: " + str(ws.shape)
         print "v shape: " + str(vs.shape)
         print "M_inv shape: " + str(M_invs.shape)
-        yield [ws, vs, M_invs, M_invs]
-
+        yield [ws, vs, M_invs, M_invs,M_initial]
+        M_initial = Ms[-1]
 
 if __name__ == '__main__':
-	batch_size = 1
-	model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  True)
-	#print model.metrics_names
-	# model.summary()
+    batch_size = 1
+    model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  True)
+    #print model.metrics_names
+    # model.summary()
 
-	# generator = zip(loadLeftImage(a, b, batch_size = 32), loadRightImage(a, b, batch_size = 32),
-	#     loadImu(a, b, batch_size = 32))
-	# output_gene = loadGrndTruth(batch_size = 32)
-	# #for input_tensor, output_tensor in zip()
-	# model.fit_generator(zip(generator, output_gene), steps_per_epoch=114, epochs = 1)
-
-
-	cam0_path = path + "cam0/cam0_align.csv"
-	cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
-	cam0 = list(np.array(cam0).flatten())
-	size = len(cam0)
-	left = cam0[-2]
-	right = cam0[-1]
-
-	# left image for test
-	test_left_image = load_img(path + "cam0/data/" + left, target_size=(384, 512))
-	test_left_image = img_to_array(test_left_image)
-	test_left_image = np.expand_dims(test_left_image, axis=0)
-
-	# right image for test
-	test_right_image = load_img(path + "cam0/data/" + right, target_size=(384, 512))
-	test_right_image = img_to_array(test_right_image)
-	test_right_image = np.expand_dims(test_right_image, axis=0)
-
-	# imu data for test
-	imu0_path = path + "imu0/imu0_align.csv"
-	imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
-	imu = np.array(imu0, dtype = np.float64)
-	test_imu = imu[-10:, :]
-	test_imu = np.expand_dims(test_imu, axis = 0)
-
-	# target for test
-	grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
-	gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
-	p1 = np.array(gndTurth_raw[[2,3,4]])
-	q1 = np.array(gndTurth_raw[[5,6,7,8]])
-	last_index = size * 10 - 21
-	indices = size * 10 - 11
-	p = p1[indices]
-	q = q1[indices]
-	p_last = p1[last_index]
-	q_last = q1[last_index]
-	qr = float(q[0])
-	qi = float(q[1])
-	qj = float(q[2])
-	qk = float(q[3])
-	M = np.zeros([4,4])
-	M[0,0] = 1 - 2*qj*qj - 2*qk*qk
-	M[1,0] = 2*(qi*qj+qk*qr)
-	M[2,0] = 2*(qi*qk-qj*qr)
-	M[3,0] = 0
-	M[0,1] = 2*(qi*qj-qk*qr)
-	M[1,1] = 1-2*qi*qi-2*qk*qk
-	M[2,1] = 2*(qi*qr+qj*qk)
-	M[3,1] = 0
-	M[0,2] = 2*(qi*qk+qj*qr)
-	M[1,2] = 2*(qj*qk-qi*qr)
-	M[2,2] = 1-2*(qi*qi+qj*qj)
-	M[3,2] = 0
-	M[0,3] = float(p[0])
-	M[1,3] = float(p[1])
-	M[2,3] = float(p[2])
-	M[3,3] = 1
-	M_inv = np.linalg.inv(M)
-
-	# last M
-	qr = float(q_last[0])
-	qi = float(q_last[1])
-	qj = float(q_last[2])
-	qk = float(q_last[3])
-	M_last = np.zeros([4,4])
-	M_last[0,0] = 1 - 2*qj*qj - 2*qk*qk
-	M_last[1,0] = 2*(qi*qj+qk*qr)
-	M_last[2,0] = 2*(qi*qk-qj*qr)
-	M_last[3,0] = 0
-	M_last[0,1] = 2*(qi*qj-qk*qr)
-	M_last[1,1] = 1-2*qi*qi-2*qk*qk
-	M_last[2,1] = 2*(qi*qr+qj*qk)
-	M_last[3,1] = 0
-	M_last[0,2] = 2*(qi*qk+qj*qr)
-	M_last[1,2] = 2*(qj*qk-qi*qr)
-	M_last[2,2] = 1-2*(qi*qi+qj*qj)
-	M_last[3,2] = 0
-	M_last[0,3] = float(p_last[0])
-	M_last[1,3] = float(p_last[1])
-	M_last[2,3] = float(p_last[2])
-	M_last[3,3] = 1
-
-	SE = np.dot(M_inv, np.linalg.inv(M_last))
-	v = SE[:3, -1].reshape((1,3))
-	wx = SE[:3, :3]
-	wx = scipy.linalg.logm(wx)
-	w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
-	M_inv = np.expand_dims(M_inv, axis = 0)
-	test_target = [w, v, M_inv, M_inv]
-	print "w shape for test: " + str(w.shape)
-	print "v shape for test: " + str(v.shape)
-	print "M_inv shape for test: " + str(M_inv.shape)
-	print "left image for test: " + str(test_left_image.shape)
-	print "right image for test: " + str(test_right_image.shape)
-	print "imu for test: " + str(test_imu.shape)
-
-	result = []
-	for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
-		loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
-		loadGrndTruth(batch_size = batch_size)):
-		initial_train_SE3 = K.constant(target[-1][0])
-		model.layers[-1].set_initial_SE3(initial_train_SE3);
-		model.train_on_batch(x=[left_image, right_image, imu], y=target)
-		initial_test_SE3 = K.constant(test_target[-1][0])
-		model.layers[-1].set_initial_SE3(initial_test_SE3);
-		score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target)
-
-		print "score: " + str(score)
-		result.append(score)
-
-	# plt.figure()
-	# plt.plot(range(len(result)), result)
-	# plt.savefig("result.png")
+    # generator = zip(loadLeftImage(a, b, batch_size = 32), loadRightImage(a, b, batch_size = 32),
+    #     loadImu(a, b, batch_size = 32))
+    # output_gene = loadGrndTruth(batch_size = 32)
+    # #for input_tensor, output_tensor in zip()
+    # model.fit_generator(zip(generator, output_gene), steps_per_epoch=114, epochs = 1)
 
 
+    cam0_path = path + "cam0/cam0_align.csv"
+    cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
+    cam0 = list(np.array(cam0).flatten())
+    size = len(cam0)
+    left = cam0[-2]
+    right = cam0[-1]
 
-	#p_img_lst, n_img_lst, imu_lst, ans_lst = readData()
-	'''
-	model.fit({'pre_input': p_img_lst, 'nxt_input': n_img_lst, 'imu_input': imu_lst}, \
-	        {'output': ans_lst}, epochs=1, batch_size=1)
-	'''
+    # left image for test
+    test_left_image = load_img(path + "cam0/data/" + left, target_size=(384, 512))
+    test_left_image = img_to_array(test_left_image)
+    test_left_image = np.expand_dims(test_left_image, axis=0)
+
+    # right image for test
+    test_right_image = load_img(path + "cam0/data/" + right, target_size=(384, 512))
+    test_right_image = img_to_array(test_right_image)
+    test_right_image = np.expand_dims(test_right_image, axis=0)
+
+    # imu data for test
+    imu0_path = path + "imu0/imu0_align.csv"
+    imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
+    imu = np.array(imu0, dtype = np.float64)
+    test_imu = imu[-10:, :]
+    test_imu = np.expand_dims(test_imu, axis = 0)
+
+    # target for test
+    grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
+    gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
+    p1 = np.array(gndTurth_raw[[2,3,4]])
+    q1 = np.array(gndTurth_raw[[5,6,7,8]])
+    last_index = size * 10 - 21
+    indices = size * 10 - 11
+    p = p1[indices]
+    q = q1[indices]
+    p_last = p1[last_index]
+    q_last = q1[last_index]
+    qr = float(q[0])
+    qi = float(q[1])
+    qj = float(q[2])
+    qk = float(q[3])
+    M = np.zeros([4,4])
+    M[0,0] = 1 - 2*qj*qj - 2*qk*qk
+    M[1,0] = 2*(qi*qj+qk*qr)
+    M[2,0] = 2*(qi*qk-qj*qr)
+    M[3,0] = 0
+    M[0,1] = 2*(qi*qj-qk*qr)
+    M[1,1] = 1-2*qi*qi-2*qk*qk
+    M[2,1] = 2*(qi*qr+qj*qk)
+    M[3,1] = 0
+    M[0,2] = 2*(qi*qk+qj*qr)
+    M[1,2] = 2*(qj*qk-qi*qr)
+    M[2,2] = 1-2*(qi*qi+qj*qj)
+    M[3,2] = 0
+    M[0,3] = float(p[0])
+    M[1,3] = float(p[1])
+    M[2,3] = float(p[2])
+    M[3,3] = 1
+    M_inv = np.linalg.inv(M)
+
+    # last M
+    qr = float(q_last[0])
+    qi = float(q_last[1])
+    qj = float(q_last[2])
+    qk = float(q_last[3])
+    M_last = np.zeros([4,4])
+    M_last[0,0] = 1 - 2*qj*qj - 2*qk*qk
+    M_last[1,0] = 2*(qi*qj+qk*qr)
+    M_last[2,0] = 2*(qi*qk-qj*qr)
+    M_last[3,0] = 0
+    M_last[0,1] = 2*(qi*qj-qk*qr)
+    M_last[1,1] = 1-2*qi*qi-2*qk*qk
+    M_last[2,1] = 2*(qi*qr+qj*qk)
+    M_last[3,1] = 0
+    M_last[0,2] = 2*(qi*qk+qj*qr)
+    M_last[1,2] = 2*(qj*qk-qi*qr)
+    M_last[2,2] = 1-2*(qi*qi+qj*qj)
+    M_last[3,2] = 0
+    M_last[0,3] = float(p_last[0])
+    M_last[1,3] = float(p_last[1])
+    M_last[2,3] = float(p_last[2])
+    M_last[3,3] = 1; M_last_inv = np.linalg.inv(M_last)
+
+    SE = np.dot(M_inv, M_last)
+    v = SE[:3, -1].reshape((1,3))
+    wx = SE[:3, :3]
+    wx = scipy.linalg.logm(wx)
+    w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
+    M_inv = np.expand_dims(M_inv, axis = 0)
+    test_target = [w, v, M_inv, M_inv,M_last_inv]
+    print "w shape for test: " + str(w.shape)
+    print "v shape for test: " + str(v.shape)
+    print "M_inv shape for test: " + str(M_inv.shape)
+    print "left image for test: " + str(test_left_image.shape)
+    print "right image for test: " + str(test_right_image.shape)
+    print "imu for test: " + str(test_imu.shape)
+
+    result = []
+
+    for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
+        loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
+        loadGrndTruth(batch_size = batch_size)):
+        initial_train_SE3 = K.constant(target[4])
+        model.layers[-1].set_initial_SE3(initial_train_SE3);
+        model.train_on_batch(x=[left_image, right_image, imu], y=target[0:4])
+        initial_test_SE3 = K.constant(test_target[4])
+        model.layers[-1].set_initial_SE3(initial_test_SE3);
+        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
+
+        print "score: " + str(score)
+        result.append(score)
+
+for index in range(10):
+        initial_test_SE3 = K.constant(test_target[4])
+        model.layers[-1].set_initial_SE3(initial_test_SE3);
+        foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
+        initial_test_SE3 = K.constant(test_target[4])
+        model.layers[-1].set_initial_SE3(initial_test_SE3);
+        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
+
+        print "score: " + str(score)
+        result.append(score)
+
+    # plt.figure()
+    # plt.plot(range(len(result)), result)
+    # plt.savefig("result.png")
+
+
+
+    #p_img_lst, n_img_lst, imu_lst, ans_lst = readData()
+    '''
+    model.fit({'pre_input': p_img_lst, 'nxt_input': n_img_lst, 'imu_input': imu_lst}, \
+            {'output': ans_lst}, epochs=1, batch_size=1)
+    '''
