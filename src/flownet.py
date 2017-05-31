@@ -53,8 +53,12 @@ def batchSkewParamToSO3(skewParam):
     eye3 = tf.diag(tf.ones([3]))
     skewSumSquares = tf.reduce_sum(tf.square(skewParam),axis=1,keep_dims=True)
     skewNorm = tf.sqrt(skewSumSquares)
-    a = tf.expand_dims(tf.sin(skewNorm)/skewNorm,axis=-1)
-    b = tf.expand_dims((1-tf.cos(skewNorm))/skewSumSquares,axis=-1)
+    cond = skewNorm > 1e-7
+    sinTerm = tf.sin(skewNorm)
+    cosSkew = tf.cos(skewNorm)
+    cosTerm = 1.0 - cosSkew
+    a = tf.expand_dims(tf.where(cond,sinTerm/skewNorm, cosSkew),axis=-1)
+    b = tf.expand_dims(tf.where(cond,cosTerm/skewSumSquares,0.5*cosSkew),axis=-1)
     skewMatrixSquare = tf.matmul(skewMatrix,skewMatrix)
     result = eye3 + tf.multiply(a,skewMatrix) + tf.multiply(b,skewMatrixSquare)
     return result
@@ -536,7 +540,7 @@ def loadGrndTruth(batch_size = 32):
 
 
 if __name__ == '__main__':
-	batch_size = 32
+	batch_size = 1
 	model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  True)
 	#print model.metrics_names
 	# model.summary()
