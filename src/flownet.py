@@ -275,7 +275,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
     core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
     # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-    core_lstm = LSTM(6,batch_size=batch_size, name='output')(core_lstm)
+    core_lstm = LSTM(1000,batch_size=batch_size, name='output')(core_lstm)
     core_lstm_output = Dense(6)(core_lstm)
     
     print "Generating se3 to SE3 upgrading layer..."
@@ -503,7 +503,12 @@ def loadGrndTruth(batch_size = 32):
 
 if __name__ == '__main__':
     batch_size = 1
-    model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  True)
+    use_SE3 = True;
+    if use_SE3:
+        num_targets = 4
+    else:
+        num_targets = 2
+    model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  use_SE3)
     #print model.metrics_names
     # model.summary()
 
@@ -616,10 +621,10 @@ if __name__ == '__main__':
         loadGrndTruth(batch_size = batch_size)):
         initial_train_SE3 = [(target[4])]
         model.layers[-1].set_initial_SE3(initial_train_SE3);
-        model.train_on_batch(x=[left_image, right_image, imu], y=target[0:4])
+        model.train_on_batch(x=[left_image, right_image, imu], y=target[0:num_targets])
         initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
-        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
+        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
 
         print "score: " + str(score)
         result.append(score)
@@ -627,10 +632,10 @@ if __name__ == '__main__':
     for index in range(10):
         initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
-        foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
+        foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
         initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
-        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
+        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
 
         print "score: " + str(score)
         result.append(score)
