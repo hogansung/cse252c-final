@@ -119,64 +119,6 @@ class SE3ExpansionLayer(Layer):
     def compute_output_shape(self, input_shape):
         return (input_shape[0],input_shape[1]+1,input_shape[2])
     
-class SO3AccumulationLayer(Layer):
-    '''Accumulates SO3 matrices based on self.initial_SO3
-      Assumes inputs are size (batch_size,3,3)
-      retunrs (batch_size,3,3)
-      '''
-    def __init__(self, initial_SO3 = None,stateful=False,batch_size=None, **kwargs):
-        '''initial_SO3 is either a tensor if stateful==False or a list of tensors if stateful==True'''
-        self.stateful = stateful
-        self.batch_size = batch_size
-        if not stateful:
-            if initial_SO3 is None:
-                initial_SO3 = K.eye(3)
-            self.initial_SO3 = initial_SO3
-        else:
-            if initial_SO3 is None:
-                initial_SO3=[]
-                assert batch_size is not None
-                assert batch_size > 0
-                for i in len(batch_size):
-                    initial_SO3.append(K.eye(3))
-            self.initial_SO3 = initial_SO3
-        super(SO3AccumulationLayer, self).__init__(**kwargs)
-
-    def build(self, input_shape):
-        # No trainable weights, no problems
-        super(SO3AccumulationLayer, self).build(input_shape)  # Be sure to call this somewhere!
-
-    def call(self, x):
-        if self.stateful:
-            output_list = []
-
-            for index in range(self.batch_size):
-                current_matrix = x[index]
-                prev_matrix = self.initial_SO3[index];
-                current_cumulative = tf.matmul(current_matrix,prev_matrix)
-                self.initial_SO3[index]  = current_cumulative
-                output_list.append(current_cumulative)
-            if(self.batch_size and self.batch_size > 0):
-                output_tensor = K.stack(output_list)
-            else:
-                output_tensor = K.stack([K.eye(4)])
-            return output_tensor
-        else:
-            output_list = []
-            prev_matrix = self.initial_SO3
-            for index in range(self.batch_size):
-                current_matrix = x[index]
-                current_cumulative = tf.matmul(current_matrix,prev_matrix)
-                prev_matrix = current_cumulative
-                output_list.append(current_cumulative)
-            if(self.batch_size and self.batch_size > 0):
-                output_tensor = K.stack(output_list)
-            else:
-                output_tensor = K.stack([K.eye(3)])
-            return output_tensor
-
-    def compute_output_shape(self, input_shape):
-        return (input_shape[0],3,3)
         
 class SE3AccumulationLayer(Layer):
     '''Accumulates SE3 matrices based on self.initial_SE3
@@ -190,7 +132,7 @@ class SE3AccumulationLayer(Layer):
         if not stateful:
             if initial_SE3 is None:
                 initial_SE3 = K.eye(4)
-            self.initial_SE3 = initial_SE3
+            self.initial_SE3_init = initial_SE3
         else:
             if initial_SE3 is None:
                 initial_SE3=[]
@@ -198,11 +140,17 @@ class SE3AccumulationLayer(Layer):
                 assert batch_size > 0
                 for i in len(batch_size):
                     initial_SE3.append(K.eye(4))
-            self.initial_SE3 = initial_SE3
+            self.initial_SE3_init = initial_SE3
         super(SE3AccumulationLayer, self).__init__(**kwargs)
 
     def build(self, input_shape):
         # No trainable weights, no problems
+        self.initial_SE3 = []
+        if self.stateful:
+            for init in self.initial_SE3_init:
+                self.initial_SE3.append(   self.add_weight(shape=(4,4),initializer='identity',trainable=False))
+        else:
+            self.initial_SE3.append(self.add_weight(shape=(4,4),initializer='identity',trainable=False))
         super(SE3AccumulationLayer, self).build(input_shape)  # Be sure to call this somewhere!
 
     def call(self, x):
@@ -221,7 +169,7 @@ class SE3AccumulationLayer(Layer):
             return output_tensor
         else:
             output_list = []
-            prev_matrix = self.initial_SE3
+            prev_matrix = self.initial_SE3[0]
             for index in range(self.batch_size):
                 current_matrix = x[index]
                 current_cumulative = tf.matmul(current_matrix,prev_matrix)
@@ -237,6 +185,7 @@ class SE3AccumulationLayer(Layer):
         return (input_shape[0],4,4)
     def set_initial_SE3(self,initial_SE3):
         self.initial_SE3 = initial_SE3
+        self.set_weights(initial_SE3)
 
 def myDot():
     return Lambda(lambda x: tf.reduce_sum(tf.multiply(x[0],x[1]),axis=-1,keep_dims=True),name = 'myDot')
@@ -267,6 +216,8 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
 
 def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
+    print "Generating model with height={}, width={},batch_size={},use_SE3={}".format(height,width,batch_size,use_SE3)
+
     ## convolution model
 
     # left and model
@@ -295,6 +246,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
 
     # merge
+    print "Generating Correlation layer..."
     add_layer = get_correlation_layer(conv3_pool_l, conv3_pool_r,max_displacement=20,stride2=2,height_8=height/8,width_8=width/8)
 
     # merged convolution
@@ -312,6 +264,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
     height_64 = height_32/2; width_64 = width_32/2
     flatten_image = Flatten()(conv6)
 
+    print "Generating LSTM layer..."
     ## inertial model
     input_imu = Input(shape=(10, 6), name='imu_input')
     imu_output_width = 4
@@ -322,9 +275,10 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
     core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
     # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-    core_lstm = LSTM(2000,batch_size=batch_size, name='output')(core_lstm)
+    core_lstm = LSTM(6,batch_size=batch_size, name='output')(core_lstm)
     core_lstm_output = Dense(6)(core_lstm)
     
+    print "Generating se3 to SE3 upgrading layer..."
     # Handle frame-to-frame se3 outputs
     skew_vector = Lambda(batch_se3_to_skew_param,name='skew_param')(core_lstm_output)
     
@@ -348,8 +302,10 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
     model = Model(inputs = [input_l, input_r, input_imu], outputs = output_list)
     #model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
 
+    print "Compiling..."
     model.compile(optimizer='rmsprop',loss=loss_list)
     #model.compile(optimizer=SGD(lr=1, momentum=0.9, nesterov=True),loss=loss_list)
+    print "Done"
 
     return model
 
@@ -658,21 +614,21 @@ if __name__ == '__main__':
     for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
         loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
         loadGrndTruth(batch_size = batch_size)):
-        initial_train_SE3 = K.constant(target[4])
+        initial_train_SE3 = [(target[4])]
         model.layers[-1].set_initial_SE3(initial_train_SE3);
         model.train_on_batch(x=[left_image, right_image, imu], y=target[0:4])
-        initial_test_SE3 = K.constant(test_target[4])
+        initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
 
         print "score: " + str(score)
         result.append(score)
 
-for index in range(10):
-        initial_test_SE3 = K.constant(test_target[4])
+    for index in range(10):
+        initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
-        initial_test_SE3 = K.constant(test_target[4])
+        initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:4])
 
@@ -686,7 +642,5 @@ for index in range(10):
 
 
     #p_img_lst, n_img_lst, imu_lst, ans_lst = readData()
-    '''
-    model.fit({'pre_input': p_img_lst, 'nxt_input': n_img_lst, 'imu_input': imu_lst}, \
-            {'output': ans_lst}, epochs=1, batch_size=1)
-    '''
+    #model.fit({'pre_input': p_img_lst, 'nxt_input': n_img_lst, 'imu_input': imu_lst}, \
+    #        {'output': ans_lst}, epochs=1, batch_size=1)
