@@ -23,6 +23,8 @@ from keras.preprocessing.image import ImageDataGenerator, array_to_img, \
     img_to_array, load_img
 from os import listdir
 from os.path import isfile, join
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 NUM_INST = 10
@@ -100,7 +102,6 @@ def loss_position_SE3(y_true,y_pred):
 class SE3ExpansionLayer(Layer):
     ''' Converts a 3x4 SE3 matrix to its 4x4 canonical representation by appending [0,0,0,1] to the bottom '''
     def __init__(self, **kwargs):
-        '''initial_SE3 is either a tensor if stateful==False or a list of tensors if stateful==True'''
         super(SE3ExpansionLayer, self).__init__(**kwargs)
 
     def build(self, input_shape):
@@ -138,7 +139,7 @@ class SE3AccumulationLayer(Layer):
                 initial_SE3=[]
                 assert batch_size is not None
                 assert batch_size > 0
-                for i in len(batch_size):
+                for i in range(batch_size):
                     initial_SE3.append(K.eye(4))
             self.initial_SE3_init = initial_SE3
         super(SE3AccumulationLayer, self).__init__(**kwargs)
@@ -147,12 +148,17 @@ class SE3AccumulationLayer(Layer):
         # No trainable weights, no problems
         self.initial_SE3 = []
         if self.stateful:
-            for init in self.initial_SE3_init:
-                self.initial_SE3.append(   self.add_weight(shape=(4,4),initializer='identity',trainable=False))
+            for index,init in enumerate(self.initial_SE3_init):
+                weight_name = "initial_SE3_%05d" % index
+                self.initial_SE3.append(   self.add_weight(name=weight_name,shape=(4,4),initializer='identity',trainable=False))
         else:
-            self.initial_SE3.append(self.add_weight(shape=(4,4),initializer='identity',trainable=False))
+            weight_name = "initial_SE3"
+            self.initial_SE3.append(self.add_weight(name=weight_name,shape=(4,4),initializer='identity',trainable=False))
         super(SE3AccumulationLayer, self).build(input_shape)  # Be sure to call this somewhere!
-
+    def reset_states(self):
+        if not self.stateful:
+            raise AttributeError('Layer must be stateful.')
+        self.initial_SE3 = [K.eye(4) for x in self.initial_SE3]
     def call(self, x):
         if self.stateful:
             output_list = []
@@ -160,10 +166,12 @@ class SE3AccumulationLayer(Layer):
                 current_matrix = x[index]
                 prev_matrix = self.initial_SE3[index];
                 current_cumulative = tf.matmul(current_matrix,prev_matrix)
-                self.initial_SE3[index]  = current_cumulative
+                #iself.initial_SE3[index]  = current_cumulative
                 output_list.append(current_cumulative)
             if(self.batch_size and self.batch_size > 0):
                 output_tensor = K.stack(output_list)
+                updates = list(zip(self.initial_SE3,output_list))
+                self.add_update(updates,x)
             else:
                 output_tensor = K.stack([K.eye(4)])
             return output_tensor
@@ -214,15 +222,15 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
     return Lambda(lambda x: tf.concat(x, 3),name='441_output_concatenation')(layer_list)
     
 
-def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
+def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,loss_weights=[1000.0,1.0]):
 
-    print "Generating model with height={}, width={},batch_size={},use_SE3={}".format(height,width,batch_size,use_SE3)
+    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={}".format(height,width,batch_size,use_SE3,stateful)
 
     ## convolution model
 
     # left and model
-    input_l = Input(shape=(height, width, 3), name='pre_input')
-    input_r = Input(shape=(height, width, 3), name='nxt_input')
+    input_l = Input(batch_shape=(batch_size,height, width, 3), name='pre_input')
+    input_r = Input(batch_shape=(batch_size,height, width, 3), name='nxt_input')
     #layer 1
     conv1 = Convolution2D(64,(7,7), batch_size=batch_size, padding = 'same', name = 'conv1')
     conv1_l = conv1(input_l)
@@ -266,17 +274,17 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
 
     print "Generating LSTM layer..."
     ## inertial model
-    input_imu = Input(shape=(10, 6), name='imu_input')
+    input_imu = Input(batch_shape=(batch_size,10, 6), name='imu_input')
     imu_output_width = 4
-    imu_lstm = LSTM(imu_output_width, name='imu_lstm')(input_imu)
+    imu_lstm = LSTM(imu_output_width, name='imu_lstm',stateful=stateful)(input_imu)
 
     ## core LSTM
     core_lstm = concatenate([flatten_image, imu_lstm])
 
     core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
     # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-    core_lstm = LSTM(1000,batch_size=batch_size, name='output')(core_lstm)
-    core_lstm_output = Dense(6)(core_lstm)
+    core_lstm = LSTM(1000, name='core_lstm',stateful=stateful)(core_lstm)
+    core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
     
     print "Generating se3 to SE3 upgrading layer..."
     # Handle frame-to-frame se3 outputs
@@ -291,7 +299,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
     current_SE3_delta = SE3ExpansionLayer(name='SE3_delta_4x4')(SE3_delta_3x4)
     
     # accumulate SE3_deltas into a current SE3
-    SE3 = SE3AccumulationLayer(name='SE3_accumulation',batch_size=batch_size)(current_SE3_delta)
+    SE3 = SE3AccumulationLayer(name='SE3_accumulation',batch_size=batch_size,stateful=False)(current_SE3_delta)
 
     # whole model
     output_list = [skew_vector,position_vector]
@@ -299,11 +307,14 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True):
     if(use_SE3):
         output_list += [SE3,SE3]
         loss_list += [loss_angle_SE3,loss_position_SE3]
+	if len(loss_weights) ==2:
+		loss_weights += loss_weights
     model = Model(inputs = [input_l, input_r, input_imu], outputs = output_list)
     #model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
 
     print "Compiling..."
-    model.compile(optimizer='rmsprop',loss=loss_list)
+    optimizer = SGD(nesterov=True, lr=0.000003, momentum=0.99);
+    model.compile(optimizer=optimizer,loss=loss_list,loss_weights=loss_weights)
     #model.compile(optimizer=SGD(lr=1, momentum=0.9, nesterov=True),loss=loss_list)
     print "Done"
 
@@ -362,8 +373,8 @@ def readData():
     ans_lst = np.array(ans_lst)
     return p_img_lst, n_img_lst, imu_lst, ans_lst
 
-#path = "../dataset/mav0/mav0/"
-path = ""
+path = "../../dataset/mav0/mav0/"
+#path = ""
 
 
 ## left image generator
@@ -608,11 +619,12 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
 if __name__ == '__main__':
     batch_size = 1
     use_SE3 = True;
+    stateful=True;
     if use_SE3:
         num_targets = 4
     else:
         num_targets = 2
-    model = getModel(height=384, width=512,batch_size = batch_size,use_SE3 =  use_SE3)
+    model = getModel(height=384, width=512,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3)
     #print model.metrics_names
     # model.summary()
 
@@ -741,7 +753,7 @@ if __name__ == '__main__':
     print "imu for test: " + str(test_imu.shape)
 
     result = []
-
+    print "Starting training..."
     for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
         loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
         loadGrndTruth(batch_size = batch_size)):
@@ -754,8 +766,8 @@ if __name__ == '__main__':
 
         print "score: " + str(score)
         result.append(score)
-
-    for index in range(10):
+    print "Starting focused training..."
+    for index in range(50):
         initial_test_SE3 = [(test_target[4])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
