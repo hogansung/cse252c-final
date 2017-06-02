@@ -1,12 +1,16 @@
-from flownet import *
+import flownet
+import numpy as np
 import time
+import tensorflow as tf
+import keras.backend as K
+
 
 if __name__=='__main__':
-    batch_size=1
+    batch_size=5
 
-    height = 384; width = 512;
+    height = 160; width = 160;
     start = time.time()
-    model = getModel(height=height,width=width,batch_size=batch_size)
+    model = flownet.getModel(height=height,width=width,batch_size=batch_size,stateful=False)
     end = time.time()
     model_creation_time = end-start
     

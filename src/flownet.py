@@ -223,8 +223,8 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
     
 
 def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,loss_weights=[1000.0,1.0]):
-
-    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={}".format(height,width,batch_size,use_SE3,stateful)
+    num_lstm_units= 1000
+    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units)
 
     ## convolution model
 
@@ -270,7 +270,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     conv6 = Convolution2D(1024, (3, 3), padding = 'same', name='conv6')(conv5_1)
     conv6 = MaxPooling2D(name='maxpool6')(conv6)
     height_64 = height_32/2; width_64 = width_32/2
-    flatten_image = Flatten()(conv6)
+    flatten_image = Flatten(name="pre_lstm_flatten")(conv6)
 
     print "Generating LSTM layer..."
     ## inertial model
@@ -279,12 +279,21 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     imu_lstm = LSTM(imu_output_width, name='imu_lstm',stateful=stateful)(input_imu)
 
     ## core LSTM
-    core_lstm = concatenate([flatten_image, imu_lstm])
+    core_lstm_input = concatenate([flatten_image, imu_lstm])
+    core_lstm_input_width = 1024*height_64*width_64+imu_output_width
+    core_lstm_reshaped = Reshape((1, core_lstm_input_width))(core_lstm_input) # 384 * 512
 
-    core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
-    # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-    core_lstm = LSTM(1000, name='core_lstm',stateful=stateful)(core_lstm)
-    core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
+    if stateful:
+        # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful)(core_lstm_reshaped)
+        core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
+    else:
+        # Use batch dimension as the time dimension
+        core_lstm_unbatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="unbatch_permutation")(core_lstm_reshaped)
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_unbatched)
+        core_lstm_rebatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="rebatch_permutation")(core_lstm)
+        core_lstm_flattened = Flatten(name="lstm_batch_flatten")(core_lstm_rebatched)
+        core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm_flattened)
     
     print "Generating se3 to SE3 upgrading layer..."
     # Handle frame-to-frame se3 outputs
