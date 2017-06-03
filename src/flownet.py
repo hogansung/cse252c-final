@@ -13,6 +13,7 @@ import keras.backend as K
 import numpy as np
 import tensorflow as tf
 from keras.optimizers import SGD
+import itertools
 #from keras.utils.visualize_util import plot
 
 from scipy import misc
@@ -28,12 +29,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 NUM_INST = 10
-QUICK_DEBUG = False
-BATCH_SIZE = 1
+QUICK_DEBUG = True
+BATCH_SIZE = 2
 
 batch_size = BATCH_SIZE
 use_SE3 = True;
-stateful=True;
+stateful=False;
 if use_SE3:
     num_targets = 4
 else:
@@ -347,7 +348,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     #model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
 
     print "Compiling..."
-    optimizer = SGD(nesterov=True, lr=0.000003, momentum=0.99);
+    optimizer = SGD(nesterov=True, lr=0.0000001, momentum=0);
     model.compile(optimizer=optimizer,loss=loss_list,loss_weights=loss_weights)
     #model.compile(optimizer=SGD(lr=1, momentum=0.9, nesterov=True),loss=loss_list)
     print "Done"
@@ -430,7 +431,7 @@ def loadLeftImage(batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "left image: " + str(imgs.shape)
+        #print "left image: " + str(imgs.shape)
         yield imgs
 
 ## right image generator
@@ -452,7 +453,7 @@ def loadRightImage(batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "right image: " + str(imgs.shape)
+        #print "right image: " + str(imgs.shape)
         yield imgs
 
 ## imu data generator
@@ -468,7 +469,7 @@ def loadImu(batch_size = 32):
     for i in xrange(num_batch):
         data = imu[i * 10 * batch_size: min(size, (i+1) * 10 * batch_size)]
         data = data.reshape((-1, 10, 6))
-        print "imu shape:" + str(data.shape)
+        #print "imu shape:" + str(data.shape)
         yield data
 def pqToM(p,q):
     qr = float(q[0])
@@ -536,9 +537,9 @@ def loadGrndTruth(batch_size = 32):
         ws = np.concatenate(ws, axis = 0)
         vs = np.concatenate(vs, axis = 0)
         M_invs = np.concatenate(M_invs, axis = 0)
-        print "w shape: " + str(ws.shape)
-        print "v shape: " + str(vs.shape)
-        print "M_inv shape: " + str(M_invs.shape)
+        #print "w shape: " + str(ws.shape)
+        #print "v shape: " + str(vs.shape)
+        #print "M_inv shape: " + str(M_invs.shape)
         yield [ws, vs, M_invs, M_invs,M_initial]
         M_initial = Ms[-1]
 
@@ -560,7 +561,7 @@ def loadKittiLeftImage(path, size, batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "left image: " + str(imgs.shape)
+        #print "left image: " + str(imgs.shape)
         yield imgs
 
 # right image
@@ -579,7 +580,7 @@ def loadKittiRightImage(path, size, batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "left image: " + str(imgs.shape)
+        #print "left image: " + str(imgs.shape)
         yield imgs
 
 # imu data
@@ -601,7 +602,7 @@ def loadKittiImu(path, size, batch_size = 32):
                 imus.append(imu)
         imus = np.array(imus)
         imus = imus.reshape((-1,10,6))
-        print "imu shape: " + str(imus.shape)
+        # print "imu shape: " + str(imus.shape)
         yield imus
 
 # ground truth
@@ -640,9 +641,9 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
             ws = np.concatenate(ws, axis = 0)
             vs = np.concatenate(vs, axis = 0)
             M_invs = np.concatenate(M_invs, axis = 0)
-            print "w shape: " + str(ws.shape)
-            print "v shape: " + str(vs.shape)
-            print "M_inv shape: " + str(M_invs.shape)
+            #print "w shape: " + str(ws.shape)
+            #print "v shape: " + str(vs.shape)
+            #print "M_inv shape: " + str(M_invs.shape)
             yield [ws, vs, M_invs, M_invs, M_initial]
             M_initial = Ms[-1]
 
@@ -785,21 +786,21 @@ if __name__ == '__main__':
 
     result = []
     print "Starting training..."
-    for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
+    for left_image, right_image, imu, target in itertools.izip(loadLeftImage(batch_size = batch_size), 
         loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
         loadGrndTruth(batch_size = batch_size)):
         initial_train_SE3 = [(target[4])]
         model.layers[-1].set_initial_SE3(initial_train_SE3);
         x= [left_image,right_image,imu]
 	y = target[0:num_targets]
-	print '[train start]'	
+	#print '[train start]'	
         model.train_on_batch(x=x, y=y)
-	print '[train end]'	
+	#print '[train end]'	
         initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
-	print '[test start]'	
+	#print '[test start]'	
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
-	print '[test end]'
+	# print '[test end]'
 
         print "score: " + str(score)
         result.append(score)
