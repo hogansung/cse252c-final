@@ -408,69 +408,79 @@ def readData():
     ans_lst = np.array(ans_lst)
     return p_img_lst, n_img_lst, imu_lst, ans_lst
 
-path = "../../dataset/mav0/mav0/"
+#path = "../../dataset/mav0/mav0/"
 #path = ""
 
 
 ## left image generator
-def loadLeftImage(batch_size = 32):
-    cam0_path = path + "cam0/cam0_align.csv"
-    cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
-    cam0 = list(np.array(cam0).flatten())
-    cam0.pop(-1)
-    size = BATCH_SIZE if QUICK_DEBUG else len(cam0)
-    if (size % batch_size == 0):
-        num_batch = size / batch_size
-    else:
-        num_batch = size / batch_size + 1
-    for i in xrange(num_batch):
-        imgs = []
-        for j in xrange(i * batch_size, min((i+1) * batch_size, size)):
-            img = load_img(path + "cam0/data/" + cam0[j], target_size=(384, 512))
-            img = img_to_array(img)
-            img = np.expand_dims(img, axis=0)
-            imgs.append(img)
-        imgs = np.concatenate(imgs, axis = 0)
-        #print "left image: " + str(imgs.shape)
-        yield imgs
+def loadLeftImage(path, batch_size = 32):
+    batch_size = 1
+    while (True):
+        cam0_path = path + "cam0/cam0_align.csv"
+        cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
+        cam0 = list(np.array(cam0).flatten())
+        cam0.pop(-1)
+        size = len(cam0)
+        #size = 3
+        if (size % batch_size == 0):
+            num_batch = size / batch_size
+        else:
+            num_batch = size / batch_size + 1
+        for i in xrange(num_batch):
+            imgs = []
+            for j in xrange(i * batch_size, min((i+1) * batch_size, size)):
+                img = load_img(path + "cam0/data/" + cam0[j], target_size=(384, 512))
+                img = img_to_array(img)
+                img = np.expand_dims(img, axis=0)
+                imgs.append(img)
+            imgs = np.concatenate(imgs, axis = 0)
+            print "left image: " + str(imgs.shape)
+            yield imgs
 
 ## right image generator
-def loadRightImage(batch_size = 32):
-    cam0_path = path + "cam0/cam0_align.csv"
-    cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
-    cam0 = list(np.array(cam0).flatten())
-    cam0.pop(0)
-    size = BATCH_SIZE if QUICK_DEBUG else len(cam0)
-    if (size % batch_size == 0):
-        num_batch = size / batch_size
-    else:
-        num_batch = size / batch_size + 1
-    for i in xrange(num_batch):
-        imgs = []
-        for j in xrange(i * batch_size, min((i+1) * batch_size, size)):
-            img = load_img(path + "cam0/data/" + cam0[j], target_size=(384, 512))
-            img = img_to_array(img)
-            img = np.expand_dims(img, axis=0)
-            imgs.append(img)
-        imgs = np.concatenate(imgs, axis = 0)
-        #print "right image: " + str(imgs.shape)
-        yield imgs
+def loadRightImage(path, batch_size = 32):
+    batch_size = 1
+    while (True):
+        cam0_path = path + "cam0/cam0_align.csv"
+        cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
+        cam0 = list(np.array(cam0).flatten())
+        cam0.pop(0)
+        size = len(cam0)
+        #size = 3
+        if (size % batch_size == 0):
+            num_batch = size / batch_size
+        else:
+            num_batch = size / batch_size + 1
+        for i in xrange(num_batch):
+            imgs = []
+            for j in xrange(i * batch_size, min((i+1) * batch_size, size)):
+                img = load_img(path + "cam0/data/" + cam0[j], target_size=(384, 512))
+                img = img_to_array(img)
+                img = np.expand_dims(img, axis=0)
+                imgs.append(img)
+            imgs = np.concatenate(imgs, axis = 0)
+            print "right image: " + str(imgs.shape)
+            yield imgs
 
 ## imu data generator
-def loadImu(batch_size = 32):
-    imu0_path = path + "imu0/imu0_align.csv"
-    imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
-    imu = np.array(imu0, dtype = np.float64)
-    size = BATCH_SIZE*10 if QUICK_DEBUG else imu.shape[0]
-    if (size % (batch_size * 10) == 0):
-        num_batch = size / (batch_size * 10)
-    else:
-        num_batch = size / (batch_size * 10) + 1
-    for i in xrange(num_batch):
-        data = imu[i * 10 * batch_size: min(size, (i+1) * 10 * batch_size)]
-        data = data.reshape((-1, 10, 6))
-        #print "imu shape:" + str(data.shape)
-        yield data
+def loadImu(path, batch_size = 32):
+    batch_size = 1
+    while (True):
+        imu0_path = path + "imu0/imu0_align.csv"
+        imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
+        imu = np.array(imu0, dtype = np.float64)
+        #size = imu.shape[0]
+        size = 30
+        if (size % (batch_size * 10) == 0):
+            num_batch = size / (batch_size * 10)
+        else:
+            num_batch = size / (batch_size * 10) + 1
+        for i in xrange(num_batch):
+            data = imu[i * 10 * batch_size: min(size, (i+1) * 10 * batch_size)]
+            data = data.reshape((-1, 10, 6))
+            print "imu shape:" + str(data.shape)
+            yield data
+
 def pqToM(p,q):
     qr = float(q[0])
     qi = float(q[1])
@@ -494,135 +504,35 @@ def pqToM(p,q):
     M[2,3] = float(p[2])
     M[3,3] = 1
     return M
+
 ## ground truth generator
-def loadGrndTruth(batch_size = 32):
-    grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
-    gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
-    p1 = np.array(gndTurth_raw[[2,3,4]])
-    q1 = np.array(gndTurth_raw[[5,6,7,8]])
-    size = BATCH_SIZE*10 if QUICK_DEBUG else p1.shape[0]
-    M_initial = np.linalg.inv(pqToM(p1[0],q1[0]))
-    index = [ind for ind in xrange(size) if ind % 10 == 9]
-    Ms = []
-    if (len(index) % batch_size == 0):
-        num_batch = len(index) / batch_size
-    else:
-        num_batch = len(index) / batch_size + 1
-    for i in xrange(num_batch):
-        indices = index[i * batch_size: min(len(index), (i + 1) * batch_size)]
-        p = p1[indices]
-        q = q1[indices]
-        ws = []
-        vs = []
-        M_invs = []
-        for idx in xrange(p.shape[0]):
-            currentQ = q[idx]
-            currentP = p[idx]
-            M = pqToM(currentP,currentQ)
-            M_inv = np.linalg.inv(M)
-            if (len(Ms) == 0):
-                M_last = M_inv
-            else:
-                M_last = Ms[-1]
-            SE = np.dot(M_inv, np.linalg.inv(M_last))
-            v = SE[:3, -1].reshape((1,3))
-            wx = SE[:3, :3]
-            wx = scipy.linalg.logm(wx)
-            w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
-            Ms.append(M_inv)
-            M_inv = np.expand_dims(M_inv, axis = 0)
-            ws.append(w)
-            vs.append(v)
-            M_invs.append(M_inv)
-        ws = np.concatenate(ws, axis = 0)
-        vs = np.concatenate(vs, axis = 0)
-        M_invs = np.concatenate(M_invs, axis = 0)
-        #print "w shape: " + str(ws.shape)
-        #print "v shape: " + str(vs.shape)
-        #print "M_inv shape: " + str(M_invs.shape)
-        yield [ws, vs, M_invs, M_invs,M_initial]
-        M_initial = Ms[-1]
-
-## generator for kitti dataset
-
-#left image
-def loadKittiLeftImage(path, size, batch_size = 32):
-    img_folder = path + 'image_00/data/'
-    if ((size-1) % batch_size == 0):
-        num_batch = (size-1) / batch_size
-    else:
-        num_batch = (size-1) / batch_size + 1
-    for i in xrange(num_batch):
-        imgs = []
-        for j in xrange(i * batch_size, min((i+1) * batch_size, size-1)):
-            img_file = '%s%010d.png' % (img_folder, j)
-            img = load_img(img_file, target_size=(384, 512))
-            img = img_to_array(img)
-            img = np.expand_dims(img, axis=0)
-            imgs.append(img)
-        imgs = np.concatenate(imgs, axis = 0)
-        #print "left image: " + str(imgs.shape)
-        yield imgs
-
-# right image
-def loadKittiRightImage(path, size, batch_size = 32):
-    img_folder = path + 'image_00/data/'
-    if ((size-1) % batch_size == 0):
-        num_batch = (size-1) / batch_size
-    else:
-        num_batch = (size-1) / batch_size + 1
-    for i in xrange(num_batch):
-        imgs = []
-        for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
-            img_file = '%s%010d.png' % (img_folder, j)
-            img = load_img(img_file, target_size=(384, 512))
-            img = img_to_array(img)
-            img = np.expand_dims(img, axis=0)
-            imgs.append(img)
-        imgs = np.concatenate(imgs, axis = 0)
-        #print "left image: " + str(imgs.shape)
-        yield imgs
-
-# imu data
-def loadKittiImu(path, size, batch_size = 32):
-    imu_folder = path + "oxts/data/"
-    if ((size-1) % batch_size == 0):
-        num_batch = (size-1) / batch_size
-    else:
-        num_batch = (size-1) / batch_size + 1
-    for i in xrange(num_batch):
-        imus = []
-        for j in xrange(i * batch_size*10, min((i+1) * batch_size*10, (size-1)*10)):
-            imu_file = '%s%010d.txt' % (imu_folder, j)
-            with open(imu_file) as f:
-                line = f.readline()
-                tmp = line.strip().split(' ')
-                imu = np.array(tmp[11:14] + tmp[17:20])
-                imu = np.expand_dims(imu, axis=0)
-                imus.append(imu)
-        imus = np.array(imus)
-        imus = imus.reshape((-1,10,6))
-        # print "imu shape: " + str(imus.shape)
-        yield imus
-
-# ground truth
-def loadKittiGrndTruth(path, size, batch_size = 32):
-    ans_file = path + "poses/pose"
-    if ((size-1) % batch_size == 0):
-        num_batch = (size-1) / batch_size
-    else:
-        num_batch = (size-1) / batch_size + 1
-    Ms = []
-    with open(ans_file) as f:
-        lines = f.readlines()
-        M_initial = groundToMat(lines[0])
+def loadGrndTruth(path, batch_size = 32):
+    batch_size = 1
+    while (True):
+        grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
+        gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
+        p1 = np.array(gndTurth_raw[[2,3,4]])
+        q1 = np.array(gndTurth_raw[[5,6,7,8]])
+        size = p1.shape[0]
+        #size = 30
+        M_initial = np.linalg.inv(pqToM(p1[0],q1[0]))
+        index = [ind for ind in xrange(size) if ind % 10 == 9]
+        Ms = []
+        if (len(index) % batch_size == 0):
+            num_batch = len(index) / batch_size
+        else:
+            num_batch = len(index) / batch_size + 1
         for i in xrange(num_batch):
-            M_invs = []
+            indices = index[i * batch_size: min(len(index), (i + 1) * batch_size)]
+            p = p1[indices]
+            q = q1[indices]
             ws = []
             vs = []
-            for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
-                line = lines[j]
-                M = groundToMat(line)
+            M_invs = []
+            for idx in xrange(p.shape[0]):
+                currentQ = q[idx]
+                currentP = p[idx]
+                M = pqToM(currentP,currentQ)
                 M_inv = np.linalg.inv(M)
                 if (len(Ms) == 0):
                     M_last = M_inv
@@ -641,11 +551,257 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
             ws = np.concatenate(ws, axis = 0)
             vs = np.concatenate(vs, axis = 0)
             M_invs = np.concatenate(M_invs, axis = 0)
-            #print "w shape: " + str(ws.shape)
-            #print "v shape: " + str(vs.shape)
-            #print "M_inv shape: " + str(M_invs.shape)
-            yield [ws, vs, M_invs, M_invs, M_initial]
+            print "w shape: " + str(ws.shape)
+            print "v shape: " + str(vs.shape)
+            print "M_inv shape: " + str(M_invs.shape)
+            yield [ws, vs, M_invs, M_invs,M_initial]
             M_initial = Ms[-1]
+
+# def trainingGenerator(num_sequence = 1):
+#     lefts = []
+#     rights = []
+#     imus = []
+#     ws = []
+#     vs = []
+#     M_invs = []
+#     M_initials = []
+#     for i in xrange(num_sequence):
+#         path = 
+#         left = loadLeftImage(path = path)
+#         right = loadRightImage(path = path)
+#         imu = loadImu(path = path)
+#         ground = loadGrndTruth(path = path)
+#         w = ground[0]
+#         v = ground[1]
+#         M_inv = ground[2]
+#         M_initial = ground[4]
+#         ws.append(w)
+#         vs.append(v)
+#         M_invs.append(M_inv)
+#         M_initials.append(M_initial)
+#         lefts.append(left)
+#         rights.append(right)
+#         imus.append(imu)
+#     lefts = np.concatenate(lefts, axis = 0)
+#     rights = np.concatenate(rights, axis = 0)
+#     imus = np.concatenate(imus, axis = 0)
+#     ws = np.concatenate(ws, axis = 0)
+#     vs = np.concatenate(vs, axis = 0)
+#     M_invs = np.concatenate(M_invs, axis = 0)
+#     M_initials = np.concatenate(M_initials, axis = 0)
+#     grounds = [ws, vs, M_invs, M_invs, M_initials]
+#     yield lefts, rights, imus, grounds
+
+# def testGenerator(num_sequence = 1):
+#     path = 
+#     left = loadLeftImage(path = path)
+#     right = loadRightImage(path = path)
+#     imu = loadImu(path = path)
+#     ground = loadGrndTruth(path = path)
+#     w = ground[0]
+#     v = ground[1]
+#     M_inv = ground[2]
+#     M_initial = ground[4]
+#     lefts = np.repeat(left, num_sequence, axis = 0)
+#     rights = np.repeat(right, num_sequence, axis = 0)
+#     imus = np.repeat(imu, num_sequence, axis = 0)
+#     ws = np.repeat(w, num_sequence, axis = 0)
+#     vs = np.repeat(v, num_sequence, axis = 0)
+#     M_invs = np.repeat(M_inv, num_sequence, axis = 0)
+#     M_initials = np.repeat(M_initial, num_sequence, axis = 0)
+#     grounds = [ws, vs, M_invs, M_invs, M_initials]
+#     yield lefts, rights, imus, grounds
+
+## generator for kitti dataset
+
+def groundToMat(line):
+    ans = map(float, line.strip().split(' '))
+    mat = np.reshape(ans + [0, 0, 0, 1], (4, 4))
+    return mat
+
+#left image
+def loadKittiLeftImage(path, size, batch_size = 32):
+    img_folder = path + 'image_00/data/'
+    img_list = os.listdir(img_folder)
+    while (True):
+        if ((size-1) % batch_size == 0):
+            num_batch = (size-1) / batch_size
+        else:
+            num_batch = (size-1) / batch_size + 1
+        for i in xrange(num_batch):
+            imgs = []
+            for j in xrange(i * batch_size, min((i+1) * batch_size, size-1)):
+                #img_file = '%s%010d.png' % (img_folder, j)
+                img_file = img_folder+img_list[j]
+                img = load_img(img_file, target_size=(384, 512))
+                img = img_to_array(img)
+                img = np.expand_dims(img, axis=0)
+                imgs.append(img)
+            imgs = np.concatenate(imgs, axis = 0)
+            #print "left image: " + str(imgs.shape)
+            yield imgs
+            
+
+# right image
+def loadKittiRightImage(path, size, batch_size = 32):
+    img_folder = path + 'image_00/data/'
+    img_list = os.listdir(img_folder)
+    while (True):
+        if ((size-1) % batch_size == 0):
+            num_batch = (size-1) / batch_size
+        else:
+            num_batch = (size-1) / batch_size + 1
+        for i in xrange(num_batch):
+            imgs = []
+            for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
+                #img_file = '%s%010d.png' % (img_folder, j)
+                img_file = img_folder+img_list[j]
+                img = load_img(img_file, target_size=(384, 512))
+                img = img_to_array(img)
+                img = np.expand_dims(img, axis=0)
+                imgs.append(img)
+            imgs = np.concatenate(imgs, axis = 0)
+            #print "left image: " + str(imgs.shape)
+            yield imgs
+
+# imu data
+def loadKittiImu(path, size, batch_size = 32):
+    imu_folder = path + "oxts/data/"
+    imu_files = listdir(imu_folder)
+    while (True):
+        if ((size-1) % batch_size == 0):
+            num_batch = (size-1) / batch_size
+        else:
+            num_batch = (size-1) / batch_size + 1
+        for i in xrange(num_batch):
+            imus = []
+            for j in xrange(i * batch_size*10, min((i+1) * batch_size*10, (size-1)*10)):
+                imu_file = imu_folder + imu_files[j]
+                with open(imu_file) as f:
+                    line = f.readline()
+                    tmp = line.strip().split(' ')
+                    imu = np.array(tmp[11:14] + tmp[17:20])
+                    imu = np.expand_dims(imu, axis=0)
+                    imus.append(imu)
+            imus = np.array(imus)
+            imus = imus.reshape((-1,10,6))
+            #print "imu shape: " + str(imus.shape)
+            yield imus
+
+# ground truth
+def loadKittiGrndTruth(path, size, batch_size = 32):
+    ans_file = path + "pose.txt"
+    while (True):
+        if ((size-1) % batch_size == 0):
+            num_batch = (size-1) / batch_size
+        else:
+            num_batch = (size-1) / batch_size + 1
+        Ms = []
+        with open(ans_file) as f:
+            lines = f.readlines()
+            M_initial = groundToMat(lines[0])
+            for i in xrange(num_batch):
+                M_invs = []
+                ws = []
+                vs = []
+                for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
+                    line = lines[j]
+                    M = groundToMat(line)
+                    M_inv = np.linalg.inv(M)
+                    if (len(Ms) == 0):
+                        M_last = M_inv
+                    else:
+                        M_last = Ms[-1]
+                    SE = np.dot(M_inv, np.linalg.inv(M_last))
+                    v = SE[:3, -1].reshape((1,3))
+                    wx = SE[:3, :3]
+                    wx = scipy.linalg.logm(wx)
+                    w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
+                    Ms.append(M_inv)
+                    M_inv = np.expand_dims(M_inv, axis = 0)
+                    ws.append(w)
+                    vs.append(v)
+                    M_invs.append(M_inv)
+                ws = np.concatenate(ws, axis = 0)
+                vs = np.concatenate(vs, axis = 0)
+                M_invs = np.concatenate(M_invs, axis = 0)
+                #print "w shape: " + str(ws.shape)
+                #print "v shape: " + str(vs.shape)
+                #print "M_inv shape: " + str(M_invs.shape)
+                yield [ws, vs, M_invs, M_invs, M_initial]
+                M_initial = Ms[-1]
+
+def trainingKittiGenerator(num_sequence = 1):
+    paths = ["../../dataset/2011_09_30_drive_0016_sync/",
+            "../../dataset/2011_09_30_drive_0020_sync/",
+            "../../dataset/2011_09_30_drive_0028_sync/",
+            "../../dataset/2011_09_30_drive_0034_sync/",
+            "../../dataset/2011_10_03_drive_0034_sync/",
+            "../../dataset/2011_09_30_drive_0018_sync/",
+            "../../dataset/2011_09_30_drive_0027_sync/",
+            "../../dataset/2011_09_30_drive_0033_sync/",
+            "../../dataset/2011_10_03_drive_0027_sync/"]
+    while 1:
+        lefts = []
+        rights = []
+        imus = []
+        ws = []
+        vs = []
+        M_invs = []
+        M_initials = []
+        for i in xrange(num_sequence):
+            path = paths[i]
+            imu_folder = path + "oxts/data/"
+            size = len(listdir(imu_folder))
+            left = next(loadKittiLeftImage(path = path, size = size, batch_size = 1))
+            right = next(loadKittiRightImage(path = path, size = size, batch_size= 1))
+            imu = next(loadKittiImu(path = path, size = size, batch_size = 1))
+            ground = next(loadKittiGrndTruth(path = path, size = size, batch_size = 1))
+            w = ground[0]
+            v = ground[1]
+            M_inv = ground[2]
+            M_initial = ground[4]
+            ws.append(w)
+            vs.append(v)
+            M_invs.append(M_inv)
+            M_initials.append(M_initial)
+            lefts.append(left)
+            rights.append(right)
+            imus.append(imu)
+        lefts = np.concatenate(lefts, axis = 0)
+        rights = np.concatenate(rights, axis = 0)
+        imus = np.concatenate(imus, axis = 0)
+        ws = np.concatenate(ws, axis = 0)
+        vs = np.concatenate(vs, axis = 0)
+        M_invs = np.concatenate(M_invs, axis = 0)
+        M_initials = np.concatenate(M_initials, axis = 0)
+        grounds = [ws, vs, M_invs, M_invs, M_initials]
+        print lefts.shape
+        yield lefts, rights, imus, grounds
+
+def testKittiGenerator(num_sequence = 1):
+    while 1:
+        path = "../../dataset/2011_10_03_drive_0042_sync/"
+        imu_folder = path + "oxts/data/"
+        size = len(listdir(imu_folder))
+        left = next(loadKittiLeftImage(path = path, size = size, batch_size= 1))
+        right = next(loadKittiRightImage(path = path, size = size, batch_size = 1))
+        imu = next(loadKittiImu(path = path, size = size, batch_size = 1))
+        ground = next(loadKittiGrndTruth(path = path, size = size, batch_size= 1))
+        w = ground[0]
+        v = ground[1]
+        M_inv = ground[2]
+        M_initial = ground[4]
+        lefts = np.repeat(left, num_sequence, axis = 0)
+        rights = np.repeat(right, num_sequence, axis = 0)
+        imus = np.repeat(imu, num_sequence, axis = 0)
+        ws = np.repeat(w, num_sequence, axis = 0)
+        vs = np.repeat(v, num_sequence, axis = 0)
+        M_invs = np.repeat(M_inv, num_sequence, axis = 0)
+        M_initials = np.repeat(M_initial, num_sequence, axis = 0)
+        grounds = [ws, vs, M_invs, M_invs, M_initials]
+        print lefts.shape
+        yield lefts, rights, imus, grounds
 
 if __name__ == '__main__':
     model = getModel(height=384, width=512,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3)
