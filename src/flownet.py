@@ -28,6 +28,31 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 NUM_INST = 10
+QUICK_DEBUG = False
+BATCH_SIZE = 1
+
+batch_size = BATCH_SIZE
+use_SE3 = True;
+stateful=True;
+if use_SE3:
+    num_targets = 4
+else:
+    num_targets = 2
+
+class Unbuffered(object):
+   def __init__(self, stream):
+       self.stream = stream
+   def write(self, data):
+       self.stream.write(data)
+       self.stream.flush()
+   def writelines(self, datas):
+       self.stream.writelines(datas)
+       self.stream.flush()
+   def __getattr__(self, attr):
+       return getattr(self.stream, attr)
+
+import sys
+sys.stdout = Unbuffered(sys.stdout)
 
 def batch_se3_to_skew_param(batch_se3_vector):
     output = tf.slice(batch_se3_vector,[0,0],[-1,3],name='se3_to_skew_param')
@@ -392,8 +417,7 @@ def loadLeftImage(batch_size = 32):
     cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
     cam0 = list(np.array(cam0).flatten())
     cam0.pop(-1)
-    #size = len(cam0)
-    size = 3
+    size = BATCH_SIZE if QUICK_DEBUG else len(cam0)
     if (size % batch_size == 0):
         num_batch = size / batch_size
     else:
@@ -415,8 +439,7 @@ def loadRightImage(batch_size = 32):
     cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
     cam0 = list(np.array(cam0).flatten())
     cam0.pop(0)
-    #size = len(cam0)
-    size = 3
+    size = BATCH_SIZE if QUICK_DEBUG else len(cam0)
     if (size % batch_size == 0):
         num_batch = size / batch_size
     else:
@@ -437,8 +460,7 @@ def loadImu(batch_size = 32):
     imu0_path = path + "imu0/imu0_align.csv"
     imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
     imu = np.array(imu0, dtype = np.float64)
-    #size = imu.shape[0]
-    size = 30
+    size = BATCH_SIZE*10 if QUICK_DEBUG else imu.shape[0]
     if (size % (batch_size * 10) == 0):
         num_batch = size / (batch_size * 10)
     else:
@@ -477,8 +499,7 @@ def loadGrndTruth(batch_size = 32):
     gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
     p1 = np.array(gndTurth_raw[[2,3,4]])
     q1 = np.array(gndTurth_raw[[5,6,7,8]])
-    #size = p1.shape[0]
-    size = 30
+    size = BATCH_SIZE*10 if QUICK_DEBUG else p1.shape[0]
     M_initial = np.linalg.inv(pqToM(p1[0],q1[0]))
     index = [ind for ind in xrange(size) if ind % 10 == 9]
     Ms = []
@@ -626,13 +647,6 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
             M_initial = Ms[-1]
 
 if __name__ == '__main__':
-    batch_size = 1
-    use_SE3 = True;
-    stateful=True;
-    if use_SE3:
-        num_targets = 4
-    else:
-        num_targets = 2
     model = getModel(height=384, width=512,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3)
     #print model.metrics_names
     # model.summary()
@@ -665,7 +679,6 @@ if __name__ == '__main__':
 
     '''
     
-
     cam0_path = path + "cam0/cam0_align.csv"
     cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
     cam0 = list(np.array(cam0).flatten())
@@ -753,13 +766,22 @@ if __name__ == '__main__':
     wx = scipy.linalg.logm(wx)
     w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
     M_inv = np.expand_dims(M_inv, axis = 0)
-    test_target = [w, v, M_inv, M_inv,M_last_inv]
+    M_last_inv = np.expand_dims(M_last_inv, axis = 0)
+    test_target = [w, v, M_inv, M_inv, M_last_inv]
+    
+    #Reshape for batch_size
+    test_left_image = np.repeat(test_left_image, batch_size, axis=0)
+    test_right_image = np.repeat(test_right_image, batch_size, axis=0)
+    test_imu = np.repeat(test_imu, batch_size, axis=0)
+    test_target = [np.repeat(i,batch_size,axis=0) for i in test_target]
     print "w shape for test: " + str(w.shape)
     print "v shape for test: " + str(v.shape)
     print "M_inv shape for test: " + str(M_inv.shape)
     print "left image for test: " + str(test_left_image.shape)
     print "right image for test: " + str(test_right_image.shape)
     print "imu for test: " + str(test_imu.shape)
+
+    print 'batch_size = %d' % batch_size
 
     result = []
     print "Starting training..."
@@ -768,19 +790,29 @@ if __name__ == '__main__':
         loadGrndTruth(batch_size = batch_size)):
         initial_train_SE3 = [(target[4])]
         model.layers[-1].set_initial_SE3(initial_train_SE3);
-        model.train_on_batch(x=[left_image, right_image, imu], y=target[0:num_targets])
-        initial_test_SE3 = [(test_target[4])]
+        x= [left_image,right_image,imu]
+	y = target[0:num_targets]
+	print '[train start]'	
+        model.train_on_batch(x=x, y=y)
+	print '[train end]'	
+        initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
+	print '[test start]'	
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
+	print '[test end]'
 
         print "score: " + str(score)
         result.append(score)
+
+    model.save('../mdl/model_1e.h5')
+
     print "Starting focused training..."
+
     for index in range(50):
-        initial_test_SE3 = [(test_target[4])]
+        initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
-        initial_test_SE3 = [(test_target[4])]
+        initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
 
