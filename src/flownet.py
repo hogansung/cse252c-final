@@ -13,6 +13,7 @@ import keras.backend as K
 import numpy as np
 import tensorflow as tf
 from keras.optimizers import SGD
+import itertools
 #from keras.utils.visualize_util import plot
 
 from scipy import misc
@@ -28,6 +29,31 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 NUM_INST = 10
+QUICK_DEBUG = True
+BATCH_SIZE = 2
+
+batch_size = BATCH_SIZE
+use_SE3 = True;
+stateful=False;
+if use_SE3:
+    num_targets = 4
+else:
+    num_targets = 2
+
+class Unbuffered(object):
+   def __init__(self, stream):
+       self.stream = stream
+   def write(self, data):
+       self.stream.write(data)
+       self.stream.flush()
+   def writelines(self, datas):
+       self.stream.writelines(datas)
+       self.stream.flush()
+   def __getattr__(self, attr):
+       return getattr(self.stream, attr)
+
+import sys
+sys.stdout = Unbuffered(sys.stdout)
 
 def batch_se3_to_skew_param(batch_se3_vector):
     output = tf.slice(batch_se3_vector,[0,0],[-1,3],name='se3_to_skew_param')
@@ -223,8 +249,8 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
     
 
 def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,loss_weights=[1000.0,1.0]):
-
-    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={}".format(height,width,batch_size,use_SE3,stateful)
+    num_lstm_units= 1000
+    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units)
 
     ## convolution model
 
@@ -270,7 +296,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     conv6 = Convolution2D(1024, (3, 3), padding = 'same', name='conv6')(conv5_1)
     conv6 = MaxPooling2D(name='maxpool6')(conv6)
     height_64 = height_32/2; width_64 = width_32/2
-    flatten_image = Flatten()(conv6)
+    flatten_image = Flatten(name="pre_lstm_flatten")(conv6)
 
     print "Generating LSTM layer..."
     ## inertial model
@@ -279,12 +305,21 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     imu_lstm = LSTM(imu_output_width, name='imu_lstm',stateful=stateful)(input_imu)
 
     ## core LSTM
-    core_lstm = concatenate([flatten_image, imu_lstm])
+    core_lstm_input = concatenate([flatten_image, imu_lstm])
+    core_lstm_input_width = 1024*height_64*width_64+imu_output_width
+    core_lstm_reshaped = Reshape((1, core_lstm_input_width))(core_lstm_input) # 384 * 512
 
-    core_lstm = Reshape((1, 1024*height_64*width_64+imu_output_width))(core_lstm) # 384 * 512
-    # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-    core_lstm = LSTM(1000, name='core_lstm',stateful=stateful)(core_lstm)
-    core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
+    if stateful:
+        # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful)(core_lstm_reshaped)
+        core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
+    else:
+        # Use batch dimension as the time dimension
+        core_lstm_unbatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="unbatch_permutation")(core_lstm_reshaped)
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_unbatched)
+        core_lstm_rebatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="rebatch_permutation")(core_lstm)
+        core_lstm_flattened = Flatten(name="lstm_batch_flatten")(core_lstm_rebatched)
+        core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm_flattened)
     
     print "Generating se3 to SE3 upgrading layer..."
     # Handle frame-to-frame se3 outputs
@@ -313,7 +348,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     #model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
 
     print "Compiling..."
-    optimizer = SGD(nesterov=True, lr=0.000003, momentum=0.99);
+    optimizer = SGD(nesterov=True, lr=0.0000001, momentum=0);
     model.compile(optimizer=optimizer,loss=loss_list,loss_weights=loss_weights)
     #model.compile(optimizer=SGD(lr=1, momentum=0.9, nesterov=True),loss=loss_list)
     print "Done"
@@ -383,8 +418,7 @@ def loadLeftImage(batch_size = 32):
     cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
     cam0 = list(np.array(cam0).flatten())
     cam0.pop(-1)
-    #size = len(cam0)
-    size = 3
+    size = BATCH_SIZE if QUICK_DEBUG else len(cam0)
     if (size % batch_size == 0):
         num_batch = size / batch_size
     else:
@@ -397,7 +431,7 @@ def loadLeftImage(batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "left image: " + str(imgs.shape)
+        #print "left image: " + str(imgs.shape)
         yield imgs
 
 ## right image generator
@@ -406,8 +440,7 @@ def loadRightImage(batch_size = 32):
     cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
     cam0 = list(np.array(cam0).flatten())
     cam0.pop(0)
-    #size = len(cam0)
-    size = 3
+    size = BATCH_SIZE if QUICK_DEBUG else len(cam0)
     if (size % batch_size == 0):
         num_batch = size / batch_size
     else:
@@ -420,7 +453,7 @@ def loadRightImage(batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "right image: " + str(imgs.shape)
+        #print "right image: " + str(imgs.shape)
         yield imgs
 
 ## imu data generator
@@ -428,8 +461,7 @@ def loadImu(batch_size = 32):
     imu0_path = path + "imu0/imu0_align.csv"
     imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
     imu = np.array(imu0, dtype = np.float64)
-    #size = imu.shape[0]
-    size = 30
+    size = BATCH_SIZE*10 if QUICK_DEBUG else imu.shape[0]
     if (size % (batch_size * 10) == 0):
         num_batch = size / (batch_size * 10)
     else:
@@ -437,7 +469,7 @@ def loadImu(batch_size = 32):
     for i in xrange(num_batch):
         data = imu[i * 10 * batch_size: min(size, (i+1) * 10 * batch_size)]
         data = data.reshape((-1, 10, 6))
-        print "imu shape:" + str(data.shape)
+        #print "imu shape:" + str(data.shape)
         yield data
 def pqToM(p,q):
     qr = float(q[0])
@@ -468,8 +500,7 @@ def loadGrndTruth(batch_size = 32):
     gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
     p1 = np.array(gndTurth_raw[[2,3,4]])
     q1 = np.array(gndTurth_raw[[5,6,7,8]])
-    #size = p1.shape[0]
-    size = 30
+    size = BATCH_SIZE*10 if QUICK_DEBUG else p1.shape[0]
     M_initial = np.linalg.inv(pqToM(p1[0],q1[0]))
     index = [ind for ind in xrange(size) if ind % 10 == 9]
     Ms = []
@@ -506,9 +537,9 @@ def loadGrndTruth(batch_size = 32):
         ws = np.concatenate(ws, axis = 0)
         vs = np.concatenate(vs, axis = 0)
         M_invs = np.concatenate(M_invs, axis = 0)
-        print "w shape: " + str(ws.shape)
-        print "v shape: " + str(vs.shape)
-        print "M_inv shape: " + str(M_invs.shape)
+        #print "w shape: " + str(ws.shape)
+        #print "v shape: " + str(vs.shape)
+        #print "M_inv shape: " + str(M_invs.shape)
         yield [ws, vs, M_invs, M_invs,M_initial]
         M_initial = Ms[-1]
 
@@ -530,7 +561,7 @@ def loadKittiLeftImage(path, size, batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "left image: " + str(imgs.shape)
+        #print "left image: " + str(imgs.shape)
         yield imgs
 
 # right image
@@ -549,7 +580,7 @@ def loadKittiRightImage(path, size, batch_size = 32):
             img = np.expand_dims(img, axis=0)
             imgs.append(img)
         imgs = np.concatenate(imgs, axis = 0)
-        print "left image: " + str(imgs.shape)
+        #print "left image: " + str(imgs.shape)
         yield imgs
 
 # imu data
@@ -571,7 +602,7 @@ def loadKittiImu(path, size, batch_size = 32):
                 imus.append(imu)
         imus = np.array(imus)
         imus = imus.reshape((-1,10,6))
-        print "imu shape: " + str(imus.shape)
+        # print "imu shape: " + str(imus.shape)
         yield imus
 
 # ground truth
@@ -610,20 +641,13 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
             ws = np.concatenate(ws, axis = 0)
             vs = np.concatenate(vs, axis = 0)
             M_invs = np.concatenate(M_invs, axis = 0)
-            print "w shape: " + str(ws.shape)
-            print "v shape: " + str(vs.shape)
-            print "M_inv shape: " + str(M_invs.shape)
+            #print "w shape: " + str(ws.shape)
+            #print "v shape: " + str(vs.shape)
+            #print "M_inv shape: " + str(M_invs.shape)
             yield [ws, vs, M_invs, M_invs, M_initial]
             M_initial = Ms[-1]
 
 if __name__ == '__main__':
-    batch_size = 1
-    use_SE3 = True;
-    stateful=True;
-    if use_SE3:
-        num_targets = 4
-    else:
-        num_targets = 2
     model = getModel(height=384, width=512,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3)
     #print model.metrics_names
     # model.summary()
@@ -656,7 +680,6 @@ if __name__ == '__main__':
 
     '''
     
-
     cam0_path = path + "cam0/cam0_align.csv"
     cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
     cam0 = list(np.array(cam0).flatten())
@@ -744,7 +767,14 @@ if __name__ == '__main__':
     wx = scipy.linalg.logm(wx)
     w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
     M_inv = np.expand_dims(M_inv, axis = 0)
-    test_target = [w, v, M_inv, M_inv,M_last_inv]
+    M_last_inv = np.expand_dims(M_last_inv, axis = 0)
+    test_target = [w, v, M_inv, M_inv, M_last_inv]
+    
+    #Reshape for batch_size
+    test_left_image = np.repeat(test_left_image, batch_size, axis=0)
+    test_right_image = np.repeat(test_right_image, batch_size, axis=0)
+    test_imu = np.repeat(test_imu, batch_size, axis=0)
+    test_target = [np.repeat(i,batch_size,axis=0) for i in test_target]
     print "w shape for test: " + str(w.shape)
     print "v shape for test: " + str(v.shape)
     print "M_inv shape for test: " + str(M_inv.shape)
@@ -752,26 +782,38 @@ if __name__ == '__main__':
     print "right image for test: " + str(test_right_image.shape)
     print "imu for test: " + str(test_imu.shape)
 
+    print 'batch_size = %d' % batch_size
+
     result = []
     print "Starting training..."
-    for left_image, right_image, imu, target in zip(loadLeftImage(batch_size = batch_size), 
+    for left_image, right_image, imu, target in itertools.izip(loadLeftImage(batch_size = batch_size), 
         loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
         loadGrndTruth(batch_size = batch_size)):
         initial_train_SE3 = [(target[4])]
         model.layers[-1].set_initial_SE3(initial_train_SE3);
-        model.train_on_batch(x=[left_image, right_image, imu], y=target[0:num_targets])
-        initial_test_SE3 = [(test_target[4])]
+        x= [left_image,right_image,imu]
+	y = target[0:num_targets]
+	#print '[train start]'	
+        model.train_on_batch(x=x, y=y)
+	#print '[train end]'	
+        initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
+	#print '[test start]'	
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
+	# print '[test end]'
 
         print "score: " + str(score)
         result.append(score)
+
+    model.save('../mdl/model_1e.h5')
+
     print "Starting focused training..."
+
     for index in range(50):
-        initial_test_SE3 = [(test_target[4])]
+        initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
-        initial_test_SE3 = [(test_target[4])]
+        initial_test_SE3 = [(test_target[4][0])]
         model.layers[-1].set_initial_SE3(initial_test_SE3);
         score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
 
