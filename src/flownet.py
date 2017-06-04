@@ -30,11 +30,11 @@ import matplotlib.pyplot as plt
 
 NUM_INST = 10
 QUICK_DEBUG = True
-BATCH_SIZE = 2
-
+BATCH_SIZE = 3
+num_epochs = 6
 batch_size = BATCH_SIZE
 use_SE3 = True;
-stateful=False;
+stateful=True;
 if use_SE3:
     num_targets = 4
 else:
@@ -104,8 +104,8 @@ def loss_SO3(y_true,y_pred):
 
 def loss_angle_SE3(y_true,y_pred):
     ''' assumes y_true is a batch_size x 4x4 matrix representing'''
-    y_true_inverse = tf.matrix_inverse(y_true)
-    small_world_errors = tf.matmul(y_true_inverse,y_pred)
+    y_pred_inverse = tf.matrix_inverse(y_pred)
+    small_world_errors = tf.matmul(y_pred_inverse,y_true)
     small_z = tf.slice(small_world_errors,[0,0,1],[-1,1,1])
     small_y = tf.slice(small_world_errors,[0,0,2],[-1,1,1])
     small_x = tf.slice(small_world_errors,[0,1,2],[-1,1,1])
@@ -197,7 +197,7 @@ class SE3AccumulationLayer(Layer):
             if(self.batch_size and self.batch_size > 0):
                 output_tensor = K.stack(output_list)
                 updates = list(zip(self.initial_SE3,output_list))
-                self.add_update(updates,x)
+                #self.add_update(updates,x)
             else:
                 output_tensor = K.stack([K.eye(4)])
             return output_tensor
@@ -248,8 +248,7 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
     return Lambda(lambda x: tf.concat(x, 3),name='441_output_concatenation')(layer_list)
     
 
-def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,loss_weights=[1000.0,1.0]):
-    num_lstm_units= 1000
+def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,loss_weights=[1000.0,1.0],num_lstm_units= 1000):
     print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units)
 
     ## convolution model
@@ -301,7 +300,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     print "Generating LSTM layer..."
     ## inertial model
     input_imu = Input(batch_shape=(batch_size,10, 6), name='imu_input')
-    imu_output_width = 4
+    imu_output_width = 15
     imu_lstm = LSTM(imu_output_width, name='imu_lstm',stateful=stateful)(input_imu)
 
     ## core LSTM
@@ -334,7 +333,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     current_SE3_delta = SE3ExpansionLayer(name='SE3_delta_4x4')(SE3_delta_3x4)
     
     # accumulate SE3_deltas into a current SE3
-    SE3 = SE3AccumulationLayer(name='SE3_accumulation',batch_size=batch_size,stateful=False)(current_SE3_delta)
+    SE3 = SE3AccumulationLayer(name='SE3_accumulation',batch_size=batch_size,stateful=stateful)(current_SE3_delta)
 
     # whole model
     output_list = [skew_vector,position_vector]
@@ -413,7 +412,7 @@ def readData():
 
 
 ## left image generator
-def loadLeftImage(path, batch_size = 32):
+def loadLeftImage(path, batch_size = 32,height = 384, width=512):
     batch_size = 1
     while (True):
         cam0_path = path + "cam0/cam0_align.csv"
@@ -429,7 +428,7 @@ def loadLeftImage(path, batch_size = 32):
         for i in xrange(num_batch):
             imgs = []
             for j in xrange(i * batch_size, min((i+1) * batch_size, size)):
-                img = load_img(path + "cam0/data/" + cam0[j], target_size=(384, 512))
+                img = load_img(path + "cam0/data/" + cam0[j], target_size=(height, width))
                 img = img_to_array(img)
                 img = np.expand_dims(img, axis=0)
                 imgs.append(img)
@@ -438,7 +437,7 @@ def loadLeftImage(path, batch_size = 32):
             yield imgs
 
 ## right image generator
-def loadRightImage(path, batch_size = 32):
+def loadRightImage(path, batch_size = 32,height = 384, width=512):
     batch_size = 1
     while (True):
         cam0_path = path + "cam0/cam0_align.csv"
@@ -454,7 +453,7 @@ def loadRightImage(path, batch_size = 32):
         for i in xrange(num_batch):
             imgs = []
             for j in xrange(i * batch_size, min((i+1) * batch_size, size)):
-                img = load_img(path + "cam0/data/" + cam0[j], target_size=(384, 512))
+                img = load_img(path + "cam0/data/" + cam0[j], target_size=(height, width))
                 img = img_to_array(img)
                 img = np.expand_dims(img, axis=0)
                 imgs.append(img)
@@ -557,6 +556,19 @@ def loadGrndTruth(path, batch_size = 32):
             yield [ws, vs, M_invs, M_invs,M_initial]
             M_initial = Ms[-1]
 
+def skewParamToSO3(skew_vector):
+    x = skew_vector[0]
+    y = skew_vector[1]  
+    z = skew_vector[2]
+    exponent = np.array([[0,-z,y],[z,0,-x],[-y,x,0]])
+    SO3 = scipy.linalg.expm(exponent)
+    return SO3
+
+def skewVToSE3(s,v):
+    SO3 = skewParamToSO3(s)
+    SE3_delta_3x4 = np.hstack([SO3,np.reshape(v,(3,1))])
+    SE3_delta_4x4 = np.vstack([SE3_delta_3x4,np.array([[0,0,0,1]])])
+    return SE3_delta_4x4
 # def trainingGenerator(num_sequence = 1):
 #     lefts = []
 #     rights = []
@@ -620,7 +632,7 @@ def groundToMat(line):
     return mat
 
 #left image
-def loadKittiLeftImage(path, size, batch_size = 32):
+def loadKittiLeftImage(path, size, batch_size = 32,height=384,width=512):
     img_folder = path + 'image_00/data/'
     img_list = os.listdir(img_folder)
     while (True):
@@ -633,7 +645,7 @@ def loadKittiLeftImage(path, size, batch_size = 32):
             for j in xrange(i * batch_size, min((i+1) * batch_size, size-1)):
                 #img_file = '%s%010d.png' % (img_folder, j)
                 img_file = img_folder+img_list[j]
-                img = load_img(img_file, target_size=(384, 512))
+                img = load_img(img_file, target_size=(height, width))
                 img = img_to_array(img)
                 img = np.expand_dims(img, axis=0)
                 imgs.append(img)
@@ -643,7 +655,7 @@ def loadKittiLeftImage(path, size, batch_size = 32):
             
 
 # right image
-def loadKittiRightImage(path, size, batch_size = 32):
+def loadKittiRightImage(path, size, batch_size = 32,height=384,width=512):
     img_folder = path + 'image_00/data/'
     img_list = os.listdir(img_folder)
     while (True):
@@ -656,7 +668,7 @@ def loadKittiRightImage(path, size, batch_size = 32):
             for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
                 #img_file = '%s%010d.png' % (img_folder, j)
                 img_file = img_folder+img_list[j]
-                img = load_img(img_file, target_size=(384, 512))
+                img = load_img(img_file, target_size=(height, width))
                 img = img_to_array(img)
                 img = np.expand_dims(img, axis=0)
                 imgs.append(img)
@@ -731,16 +743,35 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
                 yield [ws, vs, M_invs, M_invs, M_initial]
                 M_initial = Ms[-1]
 
-def trainingKittiGenerator(num_sequence = 1):
-    paths = ["../../dataset/2011_09_30_drive_0016_sync/",
-            "../../dataset/2011_09_30_drive_0020_sync/",
+def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0):
+    paths = ["../../dataset/2011_09_30_drive_0020_sync/",
             "../../dataset/2011_09_30_drive_0028_sync/",
             "../../dataset/2011_09_30_drive_0034_sync/",
             "../../dataset/2011_10_03_drive_0034_sync/",
             "../../dataset/2011_09_30_drive_0018_sync/",
             "../../dataset/2011_09_30_drive_0027_sync/",
             "../../dataset/2011_09_30_drive_0033_sync/",
-            "../../dataset/2011_10_03_drive_0027_sync/"]
+            "../../dataset/2011_10_03_drive_0027_sync/",
+            "../../dataset/2011_09_30_drive_0016_sync/"]
+    # Create all Generators
+    generators = []
+    for i in range(num_sequence):
+        path = paths[(i+path_offset) % len(paths)]
+        img_folder = path + "image_00/data/"
+        imu_folder = path + "oxts/data/"
+        ans_file = path + "pose.txt"
+        num_imgs = len(listdir(img_folder))
+        num_imu = len(listdir(imu_folder))
+        num_ground_truth = 0
+        with open(ans_file) as f:
+            myLines = f.readlines()
+            num_ground_truth = len(myLines)
+        size = min(num_imgs,num_imu/10,num_ground_truth)
+        left = iter(loadKittiLeftImage(path = path, size = size, batch_size = 1,height = height,width=width))
+        right = iter(loadKittiRightImage(path = path, size = size, batch_size= 1,height = height,width=width))
+        imu = iter(loadKittiImu(path = path, size = size, batch_size = 1))
+        ground = iter(loadKittiGrndTruth(path = path, size = size, batch_size = 1))
+        generators.append([left,right,imu,ground])
     while 1:
         lefts = []
         rights = []
@@ -749,14 +780,15 @@ def trainingKittiGenerator(num_sequence = 1):
         vs = []
         M_invs = []
         M_initials = []
+        
+        
+        #Loop through generators for each call of yield
         for i in xrange(num_sequence):
-            path = paths[i]
-            imu_folder = path + "oxts/data/"
-            size = len(listdir(imu_folder))
-            left = next(loadKittiLeftImage(path = path, size = size, batch_size = 1))
-            right = next(loadKittiRightImage(path = path, size = size, batch_size= 1))
-            imu = next(loadKittiImu(path = path, size = size, batch_size = 1))
-            ground = next(loadKittiGrndTruth(path = path, size = size, batch_size = 1))
+            iters = generators[i]
+            left = next(iters[0])
+            right = next(iters[1])
+            imu = next(iters[2])
+            ground = next(iters[3])
             w = ground[0]
             v = ground[1]
             M_inv = ground[2]
@@ -764,7 +796,7 @@ def trainingKittiGenerator(num_sequence = 1):
             ws.append(w)
             vs.append(v)
             M_invs.append(M_inv)
-            M_initials.append(M_initial)
+            M_initials.append(np.expand_dims(M_initial,axis=0))
             lefts.append(left)
             rights.append(right)
             imus.append(imu)
@@ -779,15 +811,20 @@ def trainingKittiGenerator(num_sequence = 1):
         print lefts.shape
         yield lefts, rights, imus, grounds
 
-def testKittiGenerator(num_sequence = 1):
+def testKittiGenerator(num_sequence = 1,height = 384,width=512):
+    path = "../../dataset/2011_10_03_drive_0042_sync/"
+    imu_folder = path + "oxts/data/"
+    size = len(listdir(imu_folder))
+    left = iter(loadKittiLeftImage(path = path, size = size, batch_size= 1,height = height,width=width))
+    right = iter(loadKittiRightImage(path = path, size = size, batch_size = 1,height = height,width=width))
+    imu = iter(loadKittiImu(path = path, size = size, batch_size = 1))
+    ground = iter(loadKittiGrndTruth(path = path, size = size, batch_size= 1))
+    iters = [left,right,imu,ground]
     while 1:
-        path = "../../dataset/2011_10_03_drive_0042_sync/"
-        imu_folder = path + "oxts/data/"
-        size = len(listdir(imu_folder))
-        left = next(loadKittiLeftImage(path = path, size = size, batch_size= 1))
-        right = next(loadKittiRightImage(path = path, size = size, batch_size = 1))
-        imu = next(loadKittiImu(path = path, size = size, batch_size = 1))
-        ground = next(loadKittiGrndTruth(path = path, size = size, batch_size= 1))
+        left = next(iters[0])
+        right = next(iters[1])
+        imu = next(iters[2])
+        ground = next(iters[3])
         w = ground[0]
         v = ground[1]
         M_inv = ground[2]
@@ -798,13 +835,15 @@ def testKittiGenerator(num_sequence = 1):
         ws = np.repeat(w, num_sequence, axis = 0)
         vs = np.repeat(v, num_sequence, axis = 0)
         M_invs = np.repeat(M_inv, num_sequence, axis = 0)
-        M_initials = np.repeat(M_initial, num_sequence, axis = 0)
+        M_initials = np.repeat(np.expand_dims(M_initial,axis=0), num_sequence, axis = 0)
         grounds = [ws, vs, M_invs, M_invs, M_initials]
         print lefts.shape
         yield lefts, rights, imus, grounds
 
 if __name__ == '__main__':
-    model = getModel(height=384, width=512,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3)
+    height = 200
+    width = 540
+    model = getModel(height=height, width=width,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3,num_lstm_units=500)
     #print model.metrics_names
     # model.summary()
 
@@ -835,146 +874,219 @@ if __name__ == '__main__':
         result.append(score)
 
     '''
+    train_losses =[]
+    test_losses = []
+    print_frequency = 10
+    train_iters_per_epoch = 2500
+    test_iters_per_epoch = 1100
+    num_train_sets = 9
+    offsets = range(0,num_train_sets,batch_size)
+    num_offsets = len(offsets)
+    for i in range(num_epochs):
+        train_iter = 0
+        model.reset_states()
+        for path_offset in offsets:
+            for left_image, right_image, imu, target in trainingKittiGenerator(num_sequence = batch_size,height=height,width=width,path_offset=path_offset):
+                train_iter +=1
+                initial_train_SE3 = [np.copy(initial_pose) for initial_pose in target[4]]
+                model.layers[-1].set_initial_SE3(initial_train_SE3);
+                current_losses= model.train_on_batch(x=[left_image, right_image, imu], y=target[0:num_targets])
+                train_losses.append(current_losses)
+                if (train_iter % print_frequency) == 0:
+                    print "Epoch {}, train iter {}, sequence_id {}, loss {}".format(i+1,train_iter,path_offset,current_losses)
+                if train_iter >= train_iters_per_epoch:
+                    break;
+        
+        test_iter = 0
+        model.reset_states()
+        for left_image, right_image, imu, target in testKittiGenerator(num_sequence = batch_size,height=height,width=width):
+            test_iter+=1
+            initial_test_SE3 = [np.copy(initial_pose) for initial_pose in target[4]]
+            model.layers[-1].set_initial_SE3(initial_test_SE3);
+            current_losses = model.test_on_batch(x=[left_image, right_image, imu], y=target[0:num_targets])
+            test_losses.append(current_losses)
+            if (test_iter % print_frequency) == 0:
+                print "Epoch {}, test  iter {}, loss {}".format(i+1,test_iter,current_losses)
+            if test_iter >= test_iters_per_epoch:
+                break;          
+        model.save('../mdl/model_{}_epochs.h5'.format(i+1))
+    train_losses_np = np.array(train_losses)
+    test_losses_np = np.array(test_losses)
+    plot_train_x =(np.arange(len(train_losses_np)) +1)/(train_iter*num_offsets)
+    plot_test_x = (np.arange(len(test_losses_np))+1)/test_iter
+    plt.figure(1)
+    plt.plot(np.arange(len(train_losses_np))/train_iter, train_losses_np[:,0],plot_test_x, test_losses_np[:,0])
+    plt.legend(["Train losses", "Test losses"])
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Total losses")
+    plt.savefig("total_losses.png")
+
+    plt.figure(2)
+    plt.plot(np.arange(len(train_losses_np)), train_losses_np[:,1])
+    plt.plot(np.arange(len(test_losses_np)), test_losses_np[:,1])
+    plt.plot(np.arange(len(train_losses_np)), train_losses_np[:,3])
+    plt.plot(np.arange(len(test_losses_np)), test_losses_np[:,3])
     
-    cam0_path = path + "cam0/cam0_align.csv"
-    cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
-    cam0 = list(np.array(cam0).flatten())
-    size = len(cam0)
-    left = cam0[-2]
-    right = cam0[-1]
+    plt.legend(["Train loss se3", "Test loss se3","Train loss SE3", "Test loss SE3"])
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Attitude Losses")
+    plt.savefig("attitude_losses.png")
 
-    # left image for test
-    test_left_image = load_img(path + "cam0/data/" + left, target_size=(384, 512))
-    test_left_image = img_to_array(test_left_image)
-    test_left_image = np.expand_dims(test_left_image, axis=0)
-
-    # right image for test
-    test_right_image = load_img(path + "cam0/data/" + right, target_size=(384, 512))
-    test_right_image = img_to_array(test_right_image)
-    test_right_image = np.expand_dims(test_right_image, axis=0)
-
-    # imu data for test
-    imu0_path = path + "imu0/imu0_align.csv"
-    imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
-    imu = np.array(imu0, dtype = np.float64)
-    test_imu = imu[-10:, :]
-    test_imu = np.expand_dims(test_imu, axis = 0)
-
-    # target for test
-    grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
-    gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
-    p1 = np.array(gndTurth_raw[[2,3,4]])
-    q1 = np.array(gndTurth_raw[[5,6,7,8]])
-    last_index = size * 10 - 21
-    indices = size * 10 - 11
-    p = p1[indices]
-    q = q1[indices]
-    p_last = p1[last_index]
-    q_last = q1[last_index]
-    qr = float(q[0])
-    qi = float(q[1])
-    qj = float(q[2])
-    qk = float(q[3])
-    M = np.zeros([4,4])
-    M[0,0] = 1 - 2*qj*qj - 2*qk*qk
-    M[1,0] = 2*(qi*qj+qk*qr)
-    M[2,0] = 2*(qi*qk-qj*qr)
-    M[3,0] = 0
-    M[0,1] = 2*(qi*qj-qk*qr)
-    M[1,1] = 1-2*qi*qi-2*qk*qk
-    M[2,1] = 2*(qi*qr+qj*qk)
-    M[3,1] = 0
-    M[0,2] = 2*(qi*qk+qj*qr)
-    M[1,2] = 2*(qj*qk-qi*qr)
-    M[2,2] = 1-2*(qi*qi+qj*qj)
-    M[3,2] = 0
-    M[0,3] = float(p[0])
-    M[1,3] = float(p[1])
-    M[2,3] = float(p[2])
-    M[3,3] = 1
-    M_inv = np.linalg.inv(M)
-
-    # last M
-    qr = float(q_last[0])
-    qi = float(q_last[1])
-    qj = float(q_last[2])
-    qk = float(q_last[3])
-    M_last = np.zeros([4,4])
-    M_last[0,0] = 1 - 2*qj*qj - 2*qk*qk
-    M_last[1,0] = 2*(qi*qj+qk*qr)
-    M_last[2,0] = 2*(qi*qk-qj*qr)
-    M_last[3,0] = 0
-    M_last[0,1] = 2*(qi*qj-qk*qr)
-    M_last[1,1] = 1-2*qi*qi-2*qk*qk
-    M_last[2,1] = 2*(qi*qr+qj*qk)
-    M_last[3,1] = 0
-    M_last[0,2] = 2*(qi*qk+qj*qr)
-    M_last[1,2] = 2*(qj*qk-qi*qr)
-    M_last[2,2] = 1-2*(qi*qi+qj*qj)
-    M_last[3,2] = 0
-    M_last[0,3] = float(p_last[0])
-    M_last[1,3] = float(p_last[1])
-    M_last[2,3] = float(p_last[2])
-    M_last[3,3] = 1; M_last_inv = np.linalg.inv(M_last)
-
-    SE = np.dot(M_inv, M_last)
-    v = SE[:3, -1].reshape((1,3))
-    wx = SE[:3, :3]
-    wx = scipy.linalg.logm(wx)
-    w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
-    M_inv = np.expand_dims(M_inv, axis = 0)
-    M_last_inv = np.expand_dims(M_last_inv, axis = 0)
-    test_target = [w, v, M_inv, M_inv, M_last_inv]
+    plt.figure(3)
+    plt.plot(range(len(train_losses_np)), train_losses_np[:,2])
+    plt.plot(range(len(test_losses_np)), test_losses_np[:,2])
+    plt.plot(range(len(train_losses_np)), train_losses_np[:,4])
+    plt.plot(range(len(test_losses_np)), test_losses_np[:,4])
     
-    #Reshape for batch_size
-    test_left_image = np.repeat(test_left_image, batch_size, axis=0)
-    test_right_image = np.repeat(test_right_image, batch_size, axis=0)
-    test_imu = np.repeat(test_imu, batch_size, axis=0)
-    test_target = [np.repeat(i,batch_size,axis=0) for i in test_target]
-    print "w shape for test: " + str(w.shape)
-    print "v shape for test: " + str(v.shape)
-    print "M_inv shape for test: " + str(M_inv.shape)
-    print "left image for test: " + str(test_left_image.shape)
-    print "right image for test: " + str(test_right_image.shape)
-    print "imu for test: " + str(test_imu.shape)
+    plt.legend(["Train loss se3", "Test loss se3","Train loss SE3", "Test loss SE3"])
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Attitude Losses")
+    plt.savefig("attitude_losses.png")
 
-    print 'batch_size = %d' % batch_size
 
-    result = []
-    print "Starting training..."
-    for left_image, right_image, imu, target in itertools.izip(loadLeftImage(batch_size = batch_size), 
-        loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
-        loadGrndTruth(batch_size = batch_size)):
-        initial_train_SE3 = [(target[4])]
-        model.layers[-1].set_initial_SE3(initial_train_SE3);
-        x= [left_image,right_image,imu]
-	y = target[0:num_targets]
-	#print '[train start]'	
-        model.train_on_batch(x=x, y=y)
-	#print '[train end]'	
-        initial_test_SE3 = [(test_target[4][0])]
-        model.layers[-1].set_initial_SE3(initial_test_SE3);
-	#print '[test start]'	
-        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
-	# print '[test end]'
+    
+ #    cam0_path = path + "cam0/cam0_align.csv"
+ #    cam0 = pd.read_csv(cam0_path, header = None).drop([0, 1], axis = 1)
+ #    cam0 = list(np.array(cam0).flatten())
+ #    size = len(cam0)
+ #    left = cam0[-2]
+ #    right = cam0[-1]
 
-        print "score: " + str(score)
-        result.append(score)
+ #    # left image for test
+ #    test_left_image = load_img(path + "cam0/data/" + left, target_size=(384, 512))
+ #    test_left_image = img_to_array(test_left_image)
+ #    test_left_image = np.expand_dims(test_left_image, axis=0)
 
-    model.save('../mdl/model_1e.h5')
+ #    # right image for test
+ #    test_right_image = load_img(path + "cam0/data/" + right, target_size=(384, 512))
+ #    test_right_image = img_to_array(test_right_image)
+ #    test_right_image = np.expand_dims(test_right_image, axis=0)
 
-    print "Starting focused training..."
+ #    # imu data for test
+ #    imu0_path = path + "imu0/imu0_align.csv"
+ #    imu0 = pd.read_csv(imu0_path, header = None).drop(0, axis = 1)
+ #    imu = np.array(imu0, dtype = np.float64)
+ #    test_imu = imu[-10:, :]
+ #    test_imu = np.expand_dims(test_imu, axis = 0)
 
-    for index in range(50):
-        initial_test_SE3 = [(test_target[4][0])]
-        model.layers[-1].set_initial_SE3(initial_test_SE3);
-        foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
-        initial_test_SE3 = [(test_target[4][0])]
-        model.layers[-1].set_initial_SE3(initial_test_SE3);
-        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
+ #    # target for test
+ #    grndTruth_path = path + "state_groundtruth_estimate0/ground_truth_align.csv"
+ #    gndTurth_raw = pd.read_csv(grndTruth_path, header=None).drop(0, axis = 1)
+ #    p1 = np.array(gndTurth_raw[[2,3,4]])
+ #    q1 = np.array(gndTurth_raw[[5,6,7,8]])
+ #    last_index = size * 10 - 21
+ #    indices = size * 10 - 11
+ #    p = p1[indices]
+ #    q = q1[indices]
+ #    p_last = p1[last_index]
+ #    q_last = q1[last_index]
+ #    qr = float(q[0])
+ #    qi = float(q[1])
+ #    qj = float(q[2])
+ #    qk = float(q[3])
+ #    M = np.zeros([4,4])
+ #    M[0,0] = 1 - 2*qj*qj - 2*qk*qk
+ #    M[1,0] = 2*(qi*qj+qk*qr)
+ #    M[2,0] = 2*(qi*qk-qj*qr)
+ #    M[3,0] = 0
+ #    M[0,1] = 2*(qi*qj-qk*qr)
+ #    M[1,1] = 1-2*qi*qi-2*qk*qk
+ #    M[2,1] = 2*(qi*qr+qj*qk)
+ #    M[3,1] = 0
+ #    M[0,2] = 2*(qi*qk+qj*qr)
+ #    M[1,2] = 2*(qj*qk-qi*qr)
+ #    M[2,2] = 1-2*(qi*qi+qj*qj)
+ #    M[3,2] = 0
+ #    M[0,3] = float(p[0])
+ #    M[1,3] = float(p[1])
+ #    M[2,3] = float(p[2])
+ #    M[3,3] = 1
+ #    M_inv = np.linalg.inv(M)
 
-        print "score: " + str(score)
-        result.append(score)
+ #    # last M
+ #    qr = float(q_last[0])
+ #    qi = float(q_last[1])
+ #    qj = float(q_last[2])
+ #    qk = float(q_last[3])
+ #    M_last = np.zeros([4,4])
+ #    M_last[0,0] = 1 - 2*qj*qj - 2*qk*qk
+ #    M_last[1,0] = 2*(qi*qj+qk*qr)
+ #    M_last[2,0] = 2*(qi*qk-qj*qr)
+ #    M_last[3,0] = 0
+ #    M_last[0,1] = 2*(qi*qj-qk*qr)
+ #    M_last[1,1] = 1-2*qi*qi-2*qk*qk
+ #    M_last[2,1] = 2*(qi*qr+qj*qk)
+ #    M_last[3,1] = 0
+ #    M_last[0,2] = 2*(qi*qk+qj*qr)
+ #    M_last[1,2] = 2*(qj*qk-qi*qr)
+ #    M_last[2,2] = 1-2*(qi*qi+qj*qj)
+ #    M_last[3,2] = 0
+ #    M_last[0,3] = float(p_last[0])
+ #    M_last[1,3] = float(p_last[1])
+ #    M_last[2,3] = float(p_last[2])
+ #    M_last[3,3] = 1; M_last_inv = np.linalg.inv(M_last)
+
+ #    SE = np.dot(M_inv, M_last)
+ #    v = SE[:3, -1].reshape((1,3))
+ #    wx = SE[:3, :3]
+ #    wx = scipy.linalg.logm(wx)
+ #    w = np.array([-wx[1, 2], wx[0, 2], -wx[0, 1]]).reshape((1,3))
+ #    M_inv = np.expand_dims(M_inv, axis = 0)
+ #    M_last_inv = np.expand_dims(M_last_inv, axis = 0)
+ #    test_target = [w, v, M_inv, M_inv, M_last_inv]
+    
+ #    #Reshape for batch_size
+ #    test_left_image = np.repeat(test_left_image, batch_size, axis=0)
+ #    test_right_image = np.repeat(test_right_image, batch_size, axis=0)
+ #    test_imu = np.repeat(test_imu, batch_size, axis=0)
+ #    test_target = [np.repeat(i,batch_size,axis=0) for i in test_target]
+ #    print "w shape for test: " + str(w.shape)
+ #    print "v shape for test: " + str(v.shape)
+ #    print "M_inv shape for test: " + str(M_inv.shape)
+ #    print "left image for test: " + str(test_left_image.shape)
+ #    print "right image for test: " + str(test_right_image.shape)
+ #    print "imu for test: " + str(test_imu.shape)
+
+ #    print 'batch_size = %d' % batch_size
+
+ #    result = []
+ #    print "Starting training..."
+ #    for left_image, right_image, imu, target in itertools.izip(loadLeftImage(batch_size = batch_size), 
+ #        loadRightImage(batch_size = batch_size), loadImu(batch_size = batch_size), 
+ #        loadGrndTruth(batch_size = batch_size)):
+ #        initial_train_SE3 = [(target[4])]
+ #        model.layers[-1].set_initial_SE3(initial_train_SE3);
+ #        x= [left_image,right_image,imu]
+	# y = target[0:num_targets]
+	# #print '[train start]'	
+ #        model.train_on_batch(x=x, y=y)
+	# #print '[train end]'	
+ #        initial_test_SE3 = [(test_target[4][0])]
+ #        model.layers[-1].set_initial_SE3(initial_test_SE3);
+	# #print '[test start]'	
+ #        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
+	# # print '[test end]'
+
+ #        print "score: " + str(score)
+ #        result.append(score)
+
+ #    model.save('../mdl/model_1e.h5')
+
+ #    print "Starting focused training..."
+
+ #    for index in range(50):
+ #        initial_test_SE3 = [(test_target[4][0])]
+ #        model.layers[-1].set_initial_SE3(initial_test_SE3);
+ #        foo = model.train_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
+ #        initial_test_SE3 = [(test_target[4][0])]
+ #        model.layers[-1].set_initial_SE3(initial_test_SE3);
+ #        score = model.test_on_batch(x=[test_left_image, test_right_image, test_imu], y=test_target[0:num_targets])
+
+ #        print "score: " + str(score)
+ #        result.append(score)
 
     # plt.figure()
     # plt.plot(range(len(result)), result)
