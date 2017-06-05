@@ -2,6 +2,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
 from keras.engine.topology import Layer
 from keras.models import Model, Sequential
+from keras import activations
 from keras.layers import Activation, Input, Reshape, merge, Lambda, Dropout, Flatten, Dense,LSTM
 from keras.layers.merge import add,concatenate,dot
 from keras.layers.convolutional import Convolution2D, Deconvolution2D, ZeroPadding2D, Cropping2D
@@ -253,7 +254,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={},loss_weights={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units,loss_weights)
 
     ## convolution model
-    conv_activation = "relu"
+    conv_activation = lambda x: activations.relu(x,alpha=0.1) # Use the activation from the FlowNetC Caffe implementation
     # left and model
     input_l = Input(batch_shape=(batch_size,height, width, 3), name='pre_input')
     input_r = Input(batch_shape=(batch_size,height, width, 3), name='nxt_input')
@@ -284,7 +285,9 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     add_layer = get_correlation_layer(conv3_pool_l, conv3_pool_r,max_displacement=20,stride2=2,height_8=height/8,width_8=width/8)
 
     # merged convolution
-    conv3_1 = Convolution2D(256, (3, 3), padding = 'same', name='conv3_1',activation=conv_activation)(add_layer)
+    conv3_l_redir = Convolution2D(32,(1,1),name="conv_redir",activation=conv_activation)(conv3_pool_l)
+    conv3_l_with_corr = concatenate([conv3_l_redir,add_layer],name="concatenated_correlation")
+    conv3_1 = Convolution2D(256, (3, 3), padding = 'same', name='conv3_1',activation=conv_activation)(conv3_l_with_corr)
     conv4 = Convolution2D(512, (3, 3), padding = 'same', name='conv4',activation=conv_activation)(conv3_1)
     conv4 = MaxPooling2D(name='maxpool4')(conv4)
     height_16 = height/16; width_16 = width/16
