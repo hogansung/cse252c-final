@@ -15,7 +15,7 @@ import tensorflow as tf
 from keras.optimizers import SGD
 import itertools
 #from keras.utils.visualize_util import plot
-
+import random
 from scipy import misc
 from scipy.linalg import logm, expm
 import pandas as pd
@@ -32,6 +32,7 @@ NUM_INST = 10
 QUICK_DEBUG = True
 BATCH_SIZE = 3
 num_epochs = 6
+num_train_sets = 3
 batch_size = BATCH_SIZE
 use_SE3 = True;
 stateful=True;
@@ -249,29 +250,29 @@ def get_correlation_layer(conv3_pool_l,conv3_pool_r,max_displacement=20,stride2=
     
 
 def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,loss_weights=[1000.0,1.0],num_lstm_units= 1000):
-    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units)
+    print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={},loss_weights={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units,loss_weights)
 
     ## convolution model
-
+    conv_activation = "relu"
     # left and model
     input_l = Input(batch_shape=(batch_size,height, width, 3), name='pre_input')
     input_r = Input(batch_shape=(batch_size,height, width, 3), name='nxt_input')
     #layer 1
-    conv1 = Convolution2D(64,(7,7), batch_size=batch_size, padding = 'same', name = 'conv1')
+    conv1 = Convolution2D(64,(7,7), batch_size=batch_size, padding = 'same', name = 'conv1',activation=conv_activation)
     conv1_l = conv1(input_l)
     conv1_r = conv1(input_r)
     conv1_pool_l = MaxPooling2D(name='maxpool1_l')(conv1_l)
     conv1_pool_r = MaxPooling2D(name='maxpool1_r')(conv1_r)
     
     #layer 2
-    conv2 = Convolution2D(128, (5, 5), padding = 'same', name='conv2')
+    conv2 = Convolution2D(128, (5, 5), padding = 'same', name='conv2',activation=conv_activation)
     conv2_l = conv2(conv1_pool_l)
     conv2_r = conv2(conv1_pool_r)
     conv2_pool_l = MaxPooling2D(name='maxpool2_l')(conv2_l)
     conv2_pool_r = MaxPooling2D(name='maxpool2_r')(conv2_r)
 
     #layer 3
-    conv3 = Convolution2D(256, (5, 5), padding = 'same', name='conv3')
+    conv3 = Convolution2D(256, (5, 5), padding = 'same', name='conv3',activation=conv_activation)
     conv3_l = conv3(conv2_pool_l)
     conv3_r = conv3(conv2_pool_r)
     conv3_pool_l = MaxPooling2D(name='maxpool3_l')(conv3_l)
@@ -283,16 +284,16 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     add_layer = get_correlation_layer(conv3_pool_l, conv3_pool_r,max_displacement=20,stride2=2,height_8=height/8,width_8=width/8)
 
     # merged convolution
-    conv3_1 = Convolution2D(256, (3, 3), padding = 'same', name='conv3_1')(add_layer)
-    conv4 = Convolution2D(512, (3, 3), padding = 'same', name='conv4')(conv3_1)
+    conv3_1 = Convolution2D(256, (3, 3), padding = 'same', name='conv3_1',activation=conv_activation)(add_layer)
+    conv4 = Convolution2D(512, (3, 3), padding = 'same', name='conv4',activation=conv_activation)(conv3_1)
     conv4 = MaxPooling2D(name='maxpool4')(conv4)
     height_16 = height/16; width_16 = width/16
-    conv4_1 = Convolution2D(512, (3, 3), padding = 'same', name='conv4_1')(conv4)
-    conv5 = Convolution2D(512, (3, 3), padding = 'same', name='conv5')(conv4_1)
+    conv4_1 = Convolution2D(512, (3, 3), padding = 'same', name='conv4_1',activation=conv_activation)(conv4)
+    conv5 = Convolution2D(512, (3, 3), padding = 'same', name='conv5',activation=conv_activation)(conv4_1)
     conv5 = MaxPooling2D(name='maxpool5')(conv5)
     height_32 = height_16/2; width_32 = width_16/2
-    conv5_1 = Convolution2D(512, (3, 3), padding = 'same', name='conv5_1')(conv5)
-    conv6 = Convolution2D(1024, (3, 3), padding = 'same', name='conv6')(conv5_1)
+    conv5_1 = Convolution2D(512, (3, 3), padding = 'same', name='conv5_1',activation=conv_activation)(conv5)
+    conv6 = Convolution2D(1024, (3, 3), padding = 'same', name='conv6',activation=conv_activation)(conv5_1)
     conv6 = MaxPooling2D(name='maxpool6')(conv6)
     height_64 = height_32/2; width_64 = width_32/2
     flatten_image = Flatten(name="pre_lstm_flatten")(conv6)
@@ -301,10 +302,13 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     ## inertial model
     input_imu = Input(batch_shape=(batch_size,10, 6), name='imu_input')
     imu_output_width = 15
-    imu_lstm = LSTM(imu_output_width, name='imu_lstm',stateful=stateful)(input_imu)
+    
+    imu_lstm_0 = LSTM(imu_output_width, name='imu_lstm_0',stateful=stateful,return_sequences=True)(input_imu)
+    imu_lstm_1 = LSTM(imu_output_width, name='imu_lstm_1',stateful=stateful,return_sequences=True)(imu_lstm_0)
+    imu_lstm_out = LSTM(imu_output_width, name='imu_lstm_out',stateful=stateful)(imu_lstm_1)
 
     ## core LSTM
-    core_lstm_input = concatenate([flatten_image, imu_lstm])
+    core_lstm_input = concatenate([flatten_image, imu_lstm_out])
     core_lstm_input_width = 1024*height_64*width_64+imu_output_width
     core_lstm_reshaped = Reshape((1, core_lstm_input_width))(core_lstm_input) # 384 * 512
 
@@ -347,7 +351,8 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     #model = Model(inputs = [input_l, input_r, input_imu], outputs = core_lstm)
 
     print "Compiling..."
-    optimizer = SGD(nesterov=True, lr=0.0000001, momentum=0);
+    optimizer = SGD(nesterov=True, lr=0.0000001, momentum=0.0,decay=0.000);
+    optimizer = SGD(nesterov=True, lr=0.000001, momentum=0.1,decay=0.001);
     model.compile(optimizer=optimizer,loss=loss_list,loss_weights=loss_weights)
     #model.compile(optimizer=SGD(lr=1, momentum=0.9, nesterov=True),loss=loss_list)
     print "Done"
@@ -711,7 +716,7 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
         Ms = []
         with open(ans_file) as f:
             lines = f.readlines()
-            M_initial = groundToMat(lines[0])
+            M_initial = np.linalg.inv(groundToMat(lines[0]))
             for i in xrange(num_batch):
                 M_invs = []
                 ws = []
@@ -721,7 +726,7 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
                     M = groundToMat(line)
                     M_inv = np.linalg.inv(M)
                     if (len(Ms) == 0):
-                        M_last = M_inv
+                        M_last = M_initial
                     else:
                         M_last = Ms[-1]
                     SE = np.dot(M_inv, np.linalg.inv(M_last))
@@ -743,7 +748,16 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
                 yield [ws, vs, M_invs, M_invs, M_initial]
                 M_initial = Ms[-1]
 
-def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0):
+g_kitti_paths = ["../../dataset/2011_09_30_drive_0020_sync/",
+            "../../dataset/2011_09_30_drive_0028_sync/",
+            "../../dataset/2011_09_30_drive_0034_sync/",
+            "../../dataset/2011_10_03_drive_0034_sync/",
+            "../../dataset/2011_09_30_drive_0018_sync/",
+            "../../dataset/2011_09_30_drive_0027_sync/",
+            "../../dataset/2011_09_30_drive_0033_sync/",
+            "../../dataset/2011_10_03_drive_0027_sync/",
+            "../../dataset/2011_09_30_drive_0016_sync/"]
+def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0,shuffle_sequences=False):
     paths = ["../../dataset/2011_09_30_drive_0020_sync/",
             "../../dataset/2011_09_30_drive_0028_sync/",
             "../../dataset/2011_09_30_drive_0034_sync/",
@@ -756,7 +770,12 @@ def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0
     # Create all Generators
     generators = []
     for i in range(num_sequence):
-        path = paths[(i+path_offset) % len(paths)]
+        if shuffle_sequences:
+            if path_offset==0:
+                random.shuffle(g_kitti_paths)
+            path = g_kitti_paths[(i+path_offset) % len(g_kitti_paths)]
+        else:
+            path = paths[(i+path_offset) % len(paths)]
         img_folder = path + "image_00/data/"
         imu_folder = path + "oxts/data/"
         ans_file = path + "pose.txt"
@@ -843,7 +862,11 @@ def testKittiGenerator(num_sequence = 1,height = 384,width=512):
 if __name__ == '__main__':
     height = 200
     width = 540
-    model = getModel(height=height, width=width,batch_size = batch_size,stateful=stateful,use_SE3 =  use_SE3,num_lstm_units=500)
+    SE3_advantage = 4;
+    a = 1000.0/np.sqrt(SE3_advantage);
+    b = 1/np.sqrt(SE3_advantage);
+    loss_weights = [a,b,SE3_advantage*a,SE3_advantage*b]
+    model = getModel(height=height, width=width,batch_size = batch_size,stateful=stateful,loss_weights=loss_weights,use_SE3 =  use_SE3,num_lstm_units=500)
     #print model.metrics_names
     # model.summary()
 
@@ -877,15 +900,14 @@ if __name__ == '__main__':
     train_losses =[]
     test_losses = []
     print_frequency = 10
-    train_iters_per_epoch = 2500
+    train_iters_per_epoch = 2700
     test_iters_per_epoch = 1100
-    num_train_sets = 9
     offsets = range(0,num_train_sets,batch_size)
     num_offsets = len(offsets)
     for i in range(num_epochs):
-        train_iter = 0
-        model.reset_states()
         for path_offset in offsets:
+            train_iter = 0
+            model.reset_states()
             for left_image, right_image, imu, target in trainingKittiGenerator(num_sequence = batch_size,height=height,width=width,path_offset=path_offset):
                 train_iter +=1
                 initial_train_SE3 = [np.copy(initial_pose) for initial_pose in target[4]]
@@ -910,12 +932,16 @@ if __name__ == '__main__':
             if test_iter >= test_iters_per_epoch:
                 break;          
         model.save('../mdl/model_{}_epochs.h5'.format(i+1))
+    print "Generating plots..."
     train_losses_np = np.array(train_losses)
     test_losses_np = np.array(test_losses)
+    np.savetxt("test_losses.txt",test_losses_np)
+    np.savetxt("train_losses.txt",train_losses_np)
     plot_train_x =(np.arange(len(train_losses_np)) +1)/(train_iter*num_offsets)
     plot_test_x = (np.arange(len(test_losses_np))+1)/test_iter
     plt.figure(1)
-    plt.plot(np.arange(len(train_losses_np))/train_iter, train_losses_np[:,0],plot_test_x, test_losses_np[:,0])
+    plt.cla()
+    plt.plot(plot_train_x, train_losses_np[:,0],plot_test_x, test_losses_np[:,0])
     plt.legend(["Train losses", "Test losses"])
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
@@ -923,10 +949,11 @@ if __name__ == '__main__':
     plt.savefig("total_losses.png")
 
     plt.figure(2)
-    plt.plot(np.arange(len(train_losses_np)), train_losses_np[:,1])
-    plt.plot(np.arange(len(test_losses_np)), test_losses_np[:,1])
-    plt.plot(np.arange(len(train_losses_np)), train_losses_np[:,3])
-    plt.plot(np.arange(len(test_losses_np)), test_losses_np[:,3])
+    plt.cla()
+    plt.plot(plot_train_x, train_losses_np[:,1])
+    plt.plot(plot_test_x, test_losses_np[:,1])
+    plt.plot(plot_train_x, train_losses_np[:,3])
+    plt.plot(plot_test_x, test_losses_np[:,3])
     
     plt.legend(["Train loss se3", "Test loss se3","Train loss SE3", "Test loss SE3"])
     plt.xlabel("Epoch")
@@ -935,16 +962,17 @@ if __name__ == '__main__':
     plt.savefig("attitude_losses.png")
 
     plt.figure(3)
-    plt.plot(range(len(train_losses_np)), train_losses_np[:,2])
-    plt.plot(range(len(test_losses_np)), test_losses_np[:,2])
-    plt.plot(range(len(train_losses_np)), train_losses_np[:,4])
-    plt.plot(range(len(test_losses_np)), test_losses_np[:,4])
+    plt.cla()
+    plt.plot(plot_train_x, train_losses_np[:,2])
+    plt.plot(plot_test_x, test_losses_np[:,2])
+    plt.plot(plot_train_x, train_losses_np[:,4])
+    plt.plot(plot_test_x, test_losses_np[:,4])
     
     plt.legend(["Train loss se3", "Test loss se3","Train loss SE3", "Test loss SE3"])
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title("Attitude Losses")
-    plt.savefig("attitude_losses.png")
+    plt.title("Position Losses")
+    plt.savefig("position_losses.png")
 
 
     
@@ -1011,7 +1039,7 @@ if __name__ == '__main__':
  #    qi = float(q_last[1])
  #    qj = float(q_last[2])
  #    qk = float(q_last[3])
- #    M_last = np.zeros([4,4])
+ #    M(np.arange(len(train_losses_np))/train_iter_last = np.zeros([4,4])
  #    M_last[0,0] = 1 - 2*qj*qj - 2*qk*qk
  #    M_last[1,0] = 2*(qi*qj+qk*qr)
  #    M_last[2,0] = 2*(qi*qk-qj*qr)
