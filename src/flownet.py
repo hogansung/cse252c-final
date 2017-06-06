@@ -935,6 +935,7 @@ if __name__ == '__main__':
             if test_iter >= test_iters_per_epoch:
                 break;          
         model.save('../mdl/model_{}_epochs.h5'.format(i+1))
+        model.save_weights('../mdl/model_weights_{}_epochs.hdf5'.format(i+1))
     print "Generating plots..."
     train_losses_np = np.array(train_losses)
     test_losses_np = np.array(test_losses)
