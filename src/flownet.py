@@ -940,8 +940,8 @@ if __name__ == '__main__':
     test_losses_np = np.array(test_losses)
     np.savetxt("test_losses.txt",test_losses_np)
     np.savetxt("train_losses.txt",train_losses_np)
-    plot_train_x =(np.arange(len(train_losses_np)) +1)/(train_iter*num_offsets)
-    plot_test_x = (np.arange(len(test_losses_np))+1)/test_iter
+    plot_train_x =(np.arange(len(train_losses_np),dtype=np.float64) +1)/(train_iter*num_offsets)
+    plot_test_x = (np.arange(len(test_losses_np),dtype=np.float64)+1)/test_iter
     plt.figure(1)
     plt.cla()
     plt.plot(plot_train_x, train_losses_np[:,0],plot_test_x, test_losses_np[:,0])
