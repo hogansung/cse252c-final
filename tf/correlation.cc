@@ -116,72 +116,47 @@ public:
     auto a_tensor = a.tensor<float,4>();
     auto b_tensor = b.tensor<float,4>();
     auto output_tensor = output->tensor<float,4>();
+
+    int batch_size = output->shape().dim_size(0);
+    int num_rows = output->shape().dim_size(1);
+    int num_cols = output->shape().dim_size(2);
+    int max_m = a.shape().dim_size(3);
     
-    for (int i = 0; i < output->shape().dim_size(0); i++) {
-      for (int l = 0; l < output->shape().dim_size(3); l++) {
-        int j_offset = offsets[l].first;
-        int k_offset = offsets[l].second;
-        int min_j = 0;
-        int max_j = output->shape().dim_size(1);
-        int min_k = 0;
-        int max_k = output->shape().dim_size(2);
-        if(j_offset < 0){
-            min_j = -1*j_offset;
-        }else{
-            max_j -= j_offset;
-        }
-        if(k_offset < 0){
-            min_k = -1*k_offset;
-        }else{
-            max_k -= k_offset;
-        }
-        // Zero out the top few rows
-        for (int j= 0; j<min_j; j++)
-        {
-            for(int k=0; k<output->shape().dim_size(2);k++)
-            {
-               output_tensor(i, j,k,l) =0 ;
+    for (int i = 0; i < batch_size; i++) {
+        for (int j = 0; j < num_rows; j++) {
+          for (int k = 0; k < num_cols; k++) {
+              for (int l = 0; l < num_outputs; l++) {
+                int j_offset = offsets[l].first;
+                int k_offset = offsets[l].second;
+                int min_j = 0;
+                int max_j = num_rows;
+                int min_k = 0;
+                int max_k = num_cols;
+                if(j_offset < 0){
+                    min_j = -1*j_offset;
+                }else{
+                    max_j -= j_offset;
+                }
+                if(k_offset < 0){
+                    min_k = -1*k_offset;
+                }else{
+                    max_k -= k_offset;
+                }
+                output_tensor(i, j,k,l) =0 ;
+                if( j >= min_j && j < max_j  && k >= min_k && k < max_k)
+                {
+                    for( int m = 0 ; m < a.shape().dim_size(3); m++)
+                    {
+                         output_tensor(i,j,k,l)+= a_tensor(i,j,k,m)*b_tensor(i,j+j_offset,k+k_offset,m);
+                    }
+                    output_tensor(i,j,k,l)/= max_m;
+	    
+                }
+              }
             }
-        }
-        // Zero out the bottom few rows
-        for (int j= max_j; j<output->shape().dim_size(1); j++)
-        {
-            for(int k=0; k<output->shape().dim_size(2);k++)
-            {
-               output_tensor(i, j,k,l) =0 ;
-            }
-        }
-
-        //Zero out the left and right few columns
-
-        for (int j= min_j; j<max_j; j++)
-        {
-            for(int k=0; k<min_k;k++)
-            {
-               output_tensor(i, j,k,l) =0 ;
-            }
-            for(int k=max_k; k<output->shape().dim_size(2);k++)
-            {
-               output_tensor(i, j,k,l) =0 ;
-            }
-        }
-
-
-
-        // Fill the rest with the dot product of a(i,j,k) and b(i,j+j_offset,k+k_offset)
-        for (int j = min_j; j < max_j; j++) {
-          for (int k = min_k; k < max_k; k++) {
-                 output_tensor(i, j,k,l) =0 ;
-                 int max_m = a.shape().dim_size(3);
-                 for( int m = 0 ; m < a.shape().dim_size(3); m++) {
-                     output_tensor(i,j,k,l)+= a_tensor(i,j,k,m)*b_tensor(i,j+j_offset,k+k_offset,m);
-                  }
-                  output_tensor(i,j,k,l)/= max_m;
-            }
-
         }
       }
-    }
+    
   }
 };
 

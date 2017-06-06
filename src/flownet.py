@@ -28,6 +28,9 @@ from os.path import isfile, join
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+use_custom_correlation = False
+if use_custom_correlation:
+  import CorrelationFunction
 
 NUM_INST = 10
 QUICK_DEBUG = True
@@ -282,8 +285,10 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
 
     # merge
     print "Generating Correlation layer..."
-    add_layer = get_correlation_layer(conv3_pool_l, conv3_pool_r,max_displacement=20,stride2=2,height_8=height/8,width_8=width/8)
-
+    if use_custom_correlation:
+      add_layer = Lambda( lambda x: CorrelationFunction.corr(a=x[0],b=x[1],stride=2,max_displacement=20), name= "correlation_layer")([conv3_pool_l,conv3_pool_r])
+    else:
+      add_layer = get_correlation_layer(conv3_pool_l, conv3_pool_r,max_displacement=20,stride2=2,height_8=height/8,width_8=width/8)
     # merged convolution
     conv3_l_redir = Convolution2D(32,(1,1),name="conv_redir",activation=conv_activation)(conv3_pool_l)
     conv3_l_with_corr = concatenate([conv3_l_redir,add_layer],name="concatenated_correlation")
@@ -317,7 +322,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
 
     if stateful:
         # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful)(core_lstm_reshaped)
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,implementation=2)(core_lstm_reshaped)
         core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
     else:
         # Use batch dimension as the time dimension
