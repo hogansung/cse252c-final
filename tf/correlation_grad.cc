@@ -12,10 +12,12 @@ using namespace tensorflow;
 // they are available in the Python function for registering the gradient operation.
 REGISTER_OP("CorrelationGrad")
   .Input("grad: float32")
-  .Input("input: float32")
-  .Input("weights: float32")
-  .Output("grad_input: float32")
-  .Output("grad_weights: float32");
+  .Input("a: float32")
+  .Input("b: float32")
+  .Output("grad_a: float32")
+  .Output("grad_b: float32")
+  .Attr("stride: int = 2")
+  .Attr("max_displacement: int = 20");
 
 /// \brief Implementation of an inner product gradient operation.
 /// Note that this operation is used in Python to register the gradient as
@@ -27,8 +29,23 @@ public:
   /// \brief Constructor.
   /// \param context
   explicit CorrelationGradOp(OpKernelConstruction* context) : OpKernel(context) {
-    
+            // Get the stride to
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("stride", &stride_));
+    // Check that stride is positive
+    OP_REQUIRES(context, stride_ > 0,
+                errors::InvalidArgument("Need stride > 0, got ",
+                                        stride_));
+        // Get the index of the max_displacement
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("max_displacement", &max_displacement_));
+    // Check that max_displacement is positive
+    OP_REQUIRES(context, max_displacement_ > 0,
+                errors::InvalidArgument("Need max_displacement > 0, got ",
+                                        max_displacement_));
   }
+  int stride_;
+  int max_displacement_;
   
   /// \brief Compute the inner product gradients.
   /// \param context
@@ -41,42 +58,111 @@ public:
     const Tensor& grad = context->input(0);
     
     // get the original input tensor
-    const Tensor& input = context->input(1);
+    const Tensor& a = context->input(1);
     
     // get the weight tensor
-    const Tensor& weights = context->input(2);
+    const Tensor& b = context->input(2);
     
     // create input shape (inferred from the additional attribute `n`)
-    TensorShape input_shape = input.shape();
-    TensorShape weights_shape = weights.shape();
+    TensorShape a_shape = a.shape();
+    TensorShape b_shape = b.shape();
     
-    DCHECK_EQ(input_shape.dim_size(0), weights_shape.dim_size(1));
-    DCHECK_EQ(weights_shape.dim_size(0), grad.shape().dim_size(0));
+    DCHECK_EQ(a_shape.dim_size(0), b_shape.dim_size(0));
+    DCHECK_EQ(a_shape.dim_size(1), b_shape.dim_size(1));
+    DCHECK_EQ(a_shape.dim_size(2), b_shape.dim_size(2));
+    DCHECK_EQ(a_shape.dim_size(3), b_shape.dim_size(3));
+    DCHECK_EQ(b_shape.dim_size(0), grad.shape().dim_size(0));
     
     // create output tensors
-    Tensor* grad_input = NULL;
-    Tensor* grad_weights = NULL;
-    OP_REQUIRES_OK(context, context->allocate_output(0, input_shape, &grad_input));
-    OP_REQUIRES_OK(context, context->allocate_output(1, weights_shape, &grad_weights));
+    Tensor* grad_a = NULL;
+    Tensor* grad_b = NULL;
+    OP_REQUIRES_OK(context, context->allocate_output(0, a_shape, &grad_a));
+    OP_REQUIRES_OK(context, context->allocate_output(1, b_shape, &grad_b));
     
     // get the Eigen tensors for data access
-    auto grad_tensor = grad.matrix<float>();
-    auto weights_tensor = weights.matrix<float>();
-    auto input_tensor = input.matrix<float>();
-    auto grad_input_tensor = grad_input->matrix<float>();
-    auto grad_weights_tensor = grad_weights->matrix<float>();
-    
-    // doign it manually for ismplicity
-    for (int i = 0; i < weights_shape.dim_size(0); i++) {
-      grad_input_tensor(i, 0) = 0;
-      for (int j = 0; j < grad.shape().dim_size(0); j++) {
-        grad_input_tensor(i, 0) += grad_tensor(j, 0)*weights_tensor(j, i);
-      }
+    auto grad_tensor = grad.tensor<float,4>();
+    auto a_tensor = a.tensor<float,4>();
+    auto b_tensor = b.tensor<float,4>();
+    auto grad_a_tensor = grad_a->tensor<float,4>();
+    auto grad_b_tensor = grad_b->tensor<float,4>();
+
+    int stride = stride_;
+    int max_displacement = max_displacement_;
+
+
+
+    int num_steps = 2*(max_displacement/stride) + 1;
+    int num_outputs = num_steps*num_steps;
+    DCHECK_EQ(grad.shape().dim_size(3),num_outputs);
+
+    std::vector<std::pair<int,int> > offsets(num_outputs);
+    size_t offset_index = 0;
+
+
+    for(int j = -max_displacement; j<= max_displacement;  j+= stride)
+    {
+        for(int k= -max_displacement; k <= max_displacement; k+= stride)
+        {
+            offsets.at(offset_index).first = j;
+            offsets.at(offset_index).second = k;
+            offset_index++;
+        }
     }
     
-    for (int i = 0; i < weights_shape.dim_size(0); i++) {
-      for (int j = 0; j < weights_shape.dim_size(1); j++) {
-        grad_weights_tensor(i, j) = grad_tensor(i, 0)*input_tensor(j, 0);;
+    // Zero ouut the outputs
+    int max_m      =  a.shape().dim_size(3);
+    int batch_size =  grad_a->shape().dim_size(0);
+    int num_rows   =  grad_a->shape().dim_size(1);
+    int num_cols   =  grad_a->shape().dim_size(2);
+    for (int i= 0; i< batch_size;i++)
+    {
+        for (int j= 0; j<num_rows; j++)
+        {
+            for(int k=0; k<num_cols;k++)
+            {
+                for(int m= 0; m < max_m;m++)
+                {
+                    grad_a_tensor(i, j,k,m) =0 ;
+                    grad_b_tensor(i, j,k,m) =0 ;
+                }
+            }
+        }
+    }
+
+        
+    // Iterate over the input_gradient, mapping it to the output gradient where necessary
+    for (int i = 0; i < batch_size; i++) {
+      for (int l = 0; l < num_outputs; l++) {
+        int j_offset = offsets[l].first;
+        int k_offset = offsets[l].second;
+        int min_j = 0;
+        int max_j = num_rows;
+        int min_k = 0;
+        int max_k = num_cols;
+        if(j_offset < 0){
+            min_j = -1*j_offset;
+        }else{
+            max_j -= j_offset;
+        }
+        if(k_offset < 0){
+            min_k = -1*k_offset;
+        }else{
+            max_k -= k_offset;
+        }
+
+
+        // Fill the rest with the dot product of a(i,j,k) and b(i,j+j_offset,k+k_offset)
+        for (int j = min_j; j < max_j; j++) {
+          for (int k = min_k; k < max_k; k++) {
+                 float current_coefficient = grad_tensor(i,j,k,l)/ max_m;
+                 for( int m = 0 ; m < max_m; m++) {
+                     grad_a_tensor(i,j,k,m)+= current_coefficient*b_tensor(i,j+j_offset,k+k_offset,m);
+                     grad_b_tensor(i,j+j_offset,k+k_offset,m)+= current_coefficient*a_tensor(i,j,k,m);
+                  }
+                  
+            }
+
+        }
       }
     }
   }
