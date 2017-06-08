@@ -161,3 +161,91 @@ public:
 };
 
 REGISTER_KERNEL_BUILDER(Name("Correlation").Device(DEVICE_CPU), CorrelationOp);
+
+void CorrelationKernelLauncher(const float* a, const float*b,float* out, const int batch_size,const int num_rows, const int num_cols, const int depth,const int num_offsets, const int* offset_list);
+
+class CorrelationGpuOp : public OpKernel {
+ public:
+  /// \brief Constructor.
+  /// \param context
+  explicit CorrelationGpuOp(OpKernelConstruction* context) : OpKernel(context) {
+        // Get the stride to
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("stride", &stride_));
+    // Check that stride is positive
+    OP_REQUIRES(context, stride_ > 0,
+                errors::InvalidArgument("Need stride > 0, got ",
+                                        stride_));
+        // Get the index of the max_displacement to preserve
+    OP_REQUIRES_OK(context,
+                   context->GetAttr("max_displacement", &max_displacement_));
+    // Check that max_displacement is positive
+    OP_REQUIRES(context, max_displacement_ > 0,
+                errors::InvalidArgument("Need max_displacement > 0, got ",
+                                        max_displacement_));
+  }
+  int stride_;
+  int max_displacement_;
+
+  void Compute(OpKernelContext* context) override {
+    // Grab the input tensor
+    const Tensor& a = context->input(0);
+    const Tensor& b = context->input(1);
+
+
+    // check shapes of input and weights
+    const TensorShape& a_shape = a.shape();
+    const TensorShape& b_shape = b.shape();
+    
+    // check inputs are both (batch_size,height,width,num_channels)
+    DCHECK_EQ(a_shape.dims(), 4);
+    DCHECK_EQ(b_shape.dims(), 4);
+    DCHECK_EQ(a_shape.dim_size(0), b_shape.dim_size(0));
+    DCHECK_EQ(a_shape.dim_size(1), b_shape.dim_size(1));
+    DCHECK_EQ(a_shape.dim_size(2), b_shape.dim_size(2));
+    DCHECK_EQ(a_shape.dim_size(3), b_shape.dim_size(3));
+                
+
+
+    // create output shape
+    TensorShape output_shape;
+    int num_steps = 2*(max_displacement_/stride_) + 1;
+    int num_outputs = num_steps*num_steps;
+
+    output_shape.AddDim(a_shape.dim_size(0));
+    output_shape.AddDim(a_shape.dim_size(1));
+    output_shape.AddDim(a_shape.dim_size(2));
+    output_shape.AddDim(num_outputs);
+    std::vector<int > offsets(2*num_outputs);
+    size_t offset_index = 0;
+    for(int j = -this->max_displacement_; j<= this->max_displacement_;  j+= this->stride_)
+    {
+        for(int k= -this->max_displacement_; k <= this->max_displacement_; k+= this->stride_)
+        {
+            offsets.at(offset_index+0)=j;
+            offsets.at(offset_index+1)=k;
+            offset_index+=2;
+        }
+    }
+            
+    // create output tensor
+    Tensor* output = NULL;
+    OP_REQUIRES_OK(context, context->allocate_output(0, output_shape, &output));
+    
+    // get the corresponding Eigen tensors for data access
+    int batch_size = output->shape().dim_size(0);
+    int num_rows = output->shape().dim_size(1);
+    int num_cols = output->shape().dim_size(2);
+    int depth = a.shape().dim_size(3);
+
+    auto input_a = a.flat<float>();
+    auto input_b = b.flat<float>();
+
+    auto out = output->template flat<float>();
+
+    // Call the cuda kernel launcher
+    CorrelationKernelLauncher(input_a.data(),input_b.data(), out.data(), batch_size,num_rows,num_cols,depth,num_outputs,&offsets[0]);
+  }
+};
+
+REGISTER_KERNEL_BUILDER(Name("Correlation").Device(DEVICE_GPU), CorrelationGpuOp);
