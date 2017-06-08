@@ -35,7 +35,7 @@ if use_custom_correlation:
 NUM_INST = 10
 QUICK_DEBUG = True
 BATCH_SIZE = 3
-num_epochs = 6
+num_epochs = 10
 num_train_sets = 9
 batch_size = BATCH_SIZE
 use_SE3 = True;
@@ -44,6 +44,15 @@ if use_SE3:
     num_targets = 4
 else:
     num_targets = 2
+
+SE3_advantage = 0.01;
+a = 100.0;
+b = 1;
+a1 = a/(1+SE3_advantage);
+a2 = SE3_advantage*a1;
+b1 = b/(1+SE3_advantage)
+b2 = SE3_advantage*b1;
+loss_weights = [a1,b1,a2,b2]
 
 class Unbuffered(object):
    def __init__(self, stream):
@@ -257,7 +266,8 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     print "Generating model with height={}, width={},batch_size={},use_SE3={},stateful={},lstm_units={},loss_weights={}".format(height,width,batch_size,use_SE3,stateful,num_lstm_units,loss_weights)
 
     ## convolution model
-    conv_activation = lambda x: activations.relu(x,alpha=0.1) # Use the activation from the FlowNetC Caffe implementation
+    #conv_activation = lambda x: activations.relu(x,alpha=0.1) # Use the activation from the FlowNetC Caffe implementation
+    conv_activation = "elu"
     # left and model
     input_l = Input(batch_shape=(batch_size,height, width, 3), name='pre_input')
     input_r = Input(batch_shape=(batch_size,height, width, 3), name='nxt_input')
@@ -322,12 +332,14 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
 
     if stateful:
         # core_lstm = Reshape((1, 97284))(core_lstm) # 375 * 1242
-        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,implementation=2)(core_lstm_reshaped)
+        core_lstm_0 = LSTM(num_lstm_units, name='core_lstm_0',stateful=stateful,implementation=2,return_sequences=True)(core_lstm_reshaped)
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,implementation=2)(core_lstm_0)
         core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm)
     else:
         # Use batch dimension as the time dimension
         core_lstm_unbatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="unbatch_permutation")(core_lstm_reshaped)
-        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_unbatched)
+        core_lstm_0 = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_unbatched)
+        core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_0)
         core_lstm_rebatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="rebatch_permutation")(core_lstm)
         core_lstm_flattened = Flatten(name="lstm_batch_flatten")(core_lstm_rebatched)
         core_lstm_output = Dense(6,name='core_lstm_output')(core_lstm_flattened)
@@ -361,6 +373,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     print "Compiling..."
     optimizer = SGD(nesterov=True, lr=0.0000001, momentum=0.0,decay=0.000);
     optimizer = SGD(nesterov=True, lr=0.000001, momentum=0.1,decay=0.001);
+    optimizer = SGD(nesterov=True, lr=0.00001, momentum=0.1,decay=0.001);
     model.compile(optimizer=optimizer,loss=loss_list,loss_weights=loss_weights)
     #model.compile(optimizer=SGD(lr=1, momentum=0.9, nesterov=True),loss=loss_list)
     print "Done"
@@ -645,7 +658,7 @@ def groundToMat(line):
     return mat
 
 #left image
-def loadKittiLeftImage(path, size, batch_size = 32,height=384,width=512):
+def loadKittiLeftImage(path, size, batch_size = 32,height=384,width=512,order = None):
     img_folder = path + 'image_00/data/'
     img_list = os.listdir(img_folder)
     while (True):
@@ -653,7 +666,10 @@ def loadKittiLeftImage(path, size, batch_size = 32,height=384,width=512):
             num_batch = (size-1) / batch_size
         else:
             num_batch = (size-1) / batch_size + 1
-        for i in xrange(num_batch):
+        batch_order = range(num_batch)
+        if order is not None:
+            batch_order = np.clip(order[0:num_batch],0,num_batch-1)
+        for i in batch_order:
             imgs = []
             for j in xrange(i * batch_size, min((i+1) * batch_size, size-1)):
                 #img_file = '%s%010d.png' % (img_folder, j)
@@ -668,7 +684,7 @@ def loadKittiLeftImage(path, size, batch_size = 32,height=384,width=512):
             
 
 # right image
-def loadKittiRightImage(path, size, batch_size = 32,height=384,width=512):
+def loadKittiRightImage(path, size, batch_size = 32,height=384,width=512,order = None):
     img_folder = path + 'image_00/data/'
     img_list = os.listdir(img_folder)
     while (True):
@@ -676,7 +692,10 @@ def loadKittiRightImage(path, size, batch_size = 32,height=384,width=512):
             num_batch = (size-1) / batch_size
         else:
             num_batch = (size-1) / batch_size + 1
-        for i in xrange(num_batch):
+        batch_order = range(num_batch)
+        if order is not None:
+            batch_order = np.clip(order[0:num_batch],0,num_batch-1)
+        for i in batch_order:
             imgs = []
             for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
                 #img_file = '%s%010d.png' % (img_folder, j)
@@ -690,7 +709,7 @@ def loadKittiRightImage(path, size, batch_size = 32,height=384,width=512):
             yield imgs
 
 # imu data
-def loadKittiImu(path, size, batch_size = 32):
+def loadKittiImu(path, size, batch_size = 32,order = None):
     imu_folder = path + "oxts/data/"
     imu_files = listdir(imu_folder)
     while (True):
@@ -698,7 +717,10 @@ def loadKittiImu(path, size, batch_size = 32):
             num_batch = (size-1) / batch_size
         else:
             num_batch = (size-1) / batch_size + 1
-        for i in xrange(num_batch):
+        batch_order = range(num_batch)
+        if order is not None:
+            batch_order = np.clip(order[0:num_batch],0,num_batch-1)
+        for i in batch_order:
             imus = []
             for j in xrange(i * batch_size*10, min((i+1) * batch_size*10, (size-1)*10)):
                 imu_file = imu_folder + imu_files[j]
@@ -714,7 +736,7 @@ def loadKittiImu(path, size, batch_size = 32):
             yield imus
 
 # ground truth
-def loadKittiGrndTruth(path, size, batch_size = 32):
+def loadKittiGrndTruth(path, size, batch_size = 32,order = None):
     ans_file = path + "pose.txt"
     while (True):
         if ((size-1) % batch_size == 0):
@@ -725,16 +747,21 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
         with open(ans_file) as f:
             lines = f.readlines()
             M_initial = np.linalg.inv(groundToMat(lines[0]))
-            for i in xrange(num_batch):
+            batch_order = range(num_batch)
+            if order is not None:
+                batch_order = np.clip(order[0:num_batch],0,num_batch-1)
+            for i in batch_order:
                 M_invs = []
                 ws = []
                 vs = []
+                Ms = []
                 for j in xrange(i * batch_size+1, min((i+1) * batch_size+1, size)):
                     line = lines[j]
                     M = groundToMat(line)
                     M_inv = np.linalg.inv(M)
                     if (len(Ms) == 0):
-                        M_last = M_initial
+                        M_last = np.linalg.inv(groundToMat(lines[j-1]))
+                        M_initial = M_last
                     else:
                         M_last = Ms[-1]
                     SE = np.dot(M_inv, np.linalg.inv(M_last))
@@ -754,7 +781,6 @@ def loadKittiGrndTruth(path, size, batch_size = 32):
                 #print "v shape: " + str(vs.shape)
                 #print "M_inv shape: " + str(M_invs.shape)
                 yield [ws, vs, M_invs, M_invs, M_initial]
-                M_initial = Ms[-1]
 
 g_kitti_paths = ["../../dataset/2011_09_30_drive_0020_sync/",
             "../../dataset/2011_09_30_drive_0028_sync/",
@@ -765,7 +791,7 @@ g_kitti_paths = ["../../dataset/2011_09_30_drive_0020_sync/",
             "../../dataset/2011_09_30_drive_0033_sync/",
             "../../dataset/2011_10_03_drive_0027_sync/",
             "../../dataset/2011_09_30_drive_0016_sync/"]
-def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0,shuffle_sequences=False):
+def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0,shuffle_sequences=False,shuffle_batches = False):
     paths = ["../../dataset/2011_09_30_drive_0020_sync/",
             "../../dataset/2011_09_30_drive_0028_sync/",
             "../../dataset/2011_09_30_drive_0034_sync/",
@@ -794,10 +820,14 @@ def trainingKittiGenerator(num_sequence = 1,height = 384,width=512,path_offset=0
             myLines = f.readlines()
             num_ground_truth = len(myLines)
         size = min(num_imgs,num_imu/10,num_ground_truth)
-        left = iter(loadKittiLeftImage(path = path, size = size, batch_size = 1,height = height,width=width))
-        right = iter(loadKittiRightImage(path = path, size = size, batch_size= 1,height = height,width=width))
-        imu = iter(loadKittiImu(path = path, size = size, batch_size = 1))
-        ground = iter(loadKittiGrndTruth(path = path, size = size, batch_size = 1))
+        order_list = None
+        if shuffle_batches:
+            order_list = range(0,size)
+            random.shuffle(order_list)
+        left = iter(loadKittiLeftImage(path = path, size = size, batch_size = 1,height = height,width=width,order =order_list))
+        right = iter(loadKittiRightImage(path = path, size = size, batch_size= 1,height = height,width=width,order = order_list))
+        imu = iter(loadKittiImu(path = path, size = size, batch_size = 1,order=order_list))
+        ground = iter(loadKittiGrndTruth(path = path, size = size, batch_size = 1,order=order_list))
         generators.append([left,right,imu,ground])
     while 1:
         lefts = []
@@ -870,10 +900,6 @@ def testKittiGenerator(num_sequence = 1,height = 384,width=512):
 if __name__ == '__main__':
     height = 200
     width = 540
-    SE3_advantage = 4;
-    a = 1000.0/np.sqrt(SE3_advantage);
-    b = 1/np.sqrt(SE3_advantage);
-    loss_weights = [a,b,SE3_advantage*a,SE3_advantage*b]
     model = getModel(height=height, width=width,batch_size = batch_size,stateful=stateful,loss_weights=loss_weights,use_SE3 =  use_SE3,num_lstm_units=500)
     #print model.metrics_names
     # model.summary()
@@ -916,7 +942,7 @@ if __name__ == '__main__':
         for path_offset in offsets:
             train_iter = 0
             model.reset_states()
-            for left_image, right_image, imu, target in trainingKittiGenerator(num_sequence = batch_size,height=height,width=width,path_offset=path_offset):
+            for left_image, right_image, imu, target in trainingKittiGenerator(num_sequence = batch_size,height=height,width=width,path_offset=path_offset,shuffle_sequences = True,shuffle_batches=True):
                 train_iter +=1
                 initial_train_SE3 = [np.copy(initial_pose) for initial_pose in target[4]]
                 model.layers[-1].set_initial_SE3(initial_train_SE3);
@@ -939,8 +965,8 @@ if __name__ == '__main__':
                 print "Epoch {}, test  iter {}, loss {}".format(i+1,test_iter,current_losses)
             if test_iter >= test_iters_per_epoch:
                 break;          
-        model.save('../mdl/model_{}_epochs.h5'.format(i+1))
-        model.save_weights('../mdl/model_weights_{}_epochs.hdf5'.format(i+1))
+        model.save('../mdl/model_elu_{}_epochs.h5'.format(i+1))
+        model.save_weights('../mdl/model_elu_weights_{}_epochs.hdf5'.format(i+1))
     print "Generating plots..."
     train_losses_np = np.array(train_losses)
     test_losses_np = np.array(test_losses)
