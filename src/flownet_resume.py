@@ -46,9 +46,9 @@ if use_SE3:
 else:
     num_targets = 2
 
-SE3_advantage = 1;
+SE3_advantage = 1.0;
 a = 100.0;
-b = 1;
+b = 1.0;
 a1 = a/(1+SE3_advantage);
 a2 = SE3_advantage*a1;
 b1 = b/(1+SE3_advantage)
