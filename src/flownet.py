@@ -338,7 +338,7 @@ def getModel(height = 384, width = 512,batch_size=32,use_SE3=True,stateful=True,
     else:
         # Use batch dimension as the time dimension
         core_lstm_unbatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="unbatch_permutation")(core_lstm_reshaped)
-        core_lstm_0 = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_unbatched)
+        core_lstm_0 = LSTM(num_lstm_units, name='core_lstm_0',stateful=stateful,return_sequences=True)(core_lstm_unbatched)
         core_lstm = LSTM(num_lstm_units, name='core_lstm',stateful=stateful,return_sequences=True)(core_lstm_0)
         core_lstm_rebatched = Lambda(lambda x: tf.transpose(x,[1,0,2]),name="rebatch_permutation")(core_lstm)
         core_lstm_flattened = Flatten(name="lstm_batch_flatten")(core_lstm_rebatched)
