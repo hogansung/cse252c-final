@@ -13,7 +13,7 @@ from keras.layers.merge import Add,Concatenate,Dot
 import keras.backend as K
 import numpy as np
 import tensorflow as tf
-from keras.optimizers import SGD
+from keras.optimizers import SGD,Adadelta
 import itertools
 #from keras.utils.visualize_util import plot
 import random
@@ -972,7 +972,7 @@ if __name__ == '__main__':
         train_losses_np = np.array(train_losses)
         test_losses_np = np.array(test_losses)
         testlossfile = open("test_losses_append.txt",'a')
-       trainlossfile = open("train_losses_append.txt",'a')
+        trainlossfile = open("train_losses_append.txt",'a')
         np.savetxt(testlossfile,test_losses_np)
         np.savetxt(trainlossfile,train_losses_np)
         testlossfile.close()
@@ -987,8 +987,8 @@ if __name__ == '__main__':
     np.savetxt(trainlossfile,train_losses_np)
     testlossfile.close()
     trainlossfile.close()
-    plot_train_x =(np.arange(len(train_losses_np),dtype=np.float64) +1)/(train_iters_per_epoch*num_offsets)
-    plot_test_x = (np.arange(len(test_losses_np),dtype=np.float64)+1)/test_iters_per_epoch
+    plot_train_x =(np.arange(len(train_losses_np),dtype=np.float64) +1)/(train_iters_per_epoch*num_offsets)+initial_epoch
+    plot_test_x = (np.arange(len(test_losses_np),dtype=np.float64)+1)/test_iters_per_epoch+initial_epoch
     plt.figure(1)
     plt.cla()
     plt.plot(plot_train_x, train_losses_np[:,0],plot_test_x, test_losses_np[:,0])
