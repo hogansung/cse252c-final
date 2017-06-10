@@ -968,11 +968,24 @@ if __name__ == '__main__':
                 break;          
         model.save('../mdl/model_elu_{}_epochs.h5'.format(i+1))
         model.save_weights('../mdl/model_elu_weights_{}_epochs.hdf5'.format(i+1))
+        train_losses_np = np.array(train_losses)
+        test_losses_np = np.array(test_losses)
+        testlossfile = open("test_losses_append.txt",'a')
+       trainlossfile = open("train_losses_append.txt",'a')
+        np.savetxt(testlossfile,test_losses_np)
+        np.savetxt(trainlossfile,train_losses_np)
+        testlossfile.close()
+        trainlossfile.close()
+
     print "Generating plots..."
     train_losses_np = np.array(train_losses)
     test_losses_np = np.array(test_losses)
-    np.savetxt("test_losses.txt",test_losses_np)
-    np.savetxt("train_losses.txt",train_losses_np)
+    testlossfile = open("test_losses.txt",'w')
+    trainlossfile = open("train_losses.txt",'w')
+    np.savetxt(testlossfile,test_losses_np)
+    np.savetxt(trainlossfile,train_losses_np)
+    testlossfile.close()
+    trainlossfile.close()
     plot_train_x =(np.arange(len(train_losses_np),dtype=np.float64) +1)/(train_iters_per_epoch*num_offsets)
     plot_test_x = (np.arange(len(test_losses_np),dtype=np.float64)+1)/test_iters_per_epoch
     plt.figure(1)
