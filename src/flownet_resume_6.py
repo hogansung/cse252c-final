@@ -39,6 +39,7 @@ shuffle_batches = False
 initial_epoch = 6
 num_epochs = 10
 num_train_sets = 9
+loss_order = 2
 batch_size = BATCH_SIZE
 use_SE3 = True;
 stateful=True;
@@ -118,18 +119,18 @@ def loss_SO3(y_true,y_pred):
     loss = K.mean(square_errors)
     return loss
 
-def loss_angle_SE3(y_true,y_pred):
+def loss_angle_SE3(y_true,y_pred,order=loss_order):
     ''' assumes y_true is a batch_size x 4x4 matrix representing'''
     y_pred_inverse = tf.matrix_inverse(y_pred)
     small_world_errors = tf.matmul(y_pred_inverse,y_true)
     small_z = tf.slice(small_world_errors,[0,0,1],[-1,1,1])
     small_y = tf.slice(small_world_errors,[0,0,2],[-1,1,1])
     small_x = tf.slice(small_world_errors,[0,1,2],[-1,1,1])
-    square_errors = K.square(K.stack([small_x,small_y,small_z]))
-    loss = K.mean(square_errors)
+    norm = tf.norm(tf.concat([small_x,small_y,small_z],axis=-1),axis=-1,ord=order)
+    loss = K.mean(norm)
     return loss
 
-def loss_position_SE3(y_true,y_pred):
+def loss_position_SE3(y_true,y_pred,order=loss_order):
     ''' assumes y_true is a batch_size x 4x4 matrix representing the current SE3 transform from world reference frame to camera reference frame'''
     y_true_inverse = tf.matrix_inverse(y_true)
     y_pred_inverse = tf.matrix_inverse(y_pred)
@@ -137,8 +138,8 @@ def loss_position_SE3(y_true,y_pred):
     small_x = tf.slice(small_world_errors,[0,0,3],[-1,1,1])
     small_y = tf.slice(small_world_errors,[0,1,3],[-1,1,1])
     small_z = tf.slice(small_world_errors,[0,2,3],[-1,1,1])
-    square_errors = K.square(K.stack([small_x,small_y,small_z]))
-    loss = K.mean(square_errors)
+    norm = tf.norm(tf.concat([small_x,small_y,small_z],axis=-1),axis=-1,ord=order)
+    loss = K.mean(norm)
     return loss
     
 class SE3ExpansionLayer(Layer):
