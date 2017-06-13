@@ -36,8 +36,8 @@ NUM_INST = 10
 QUICK_DEBUG = True
 BATCH_SIZE = 3
 shuffle_batches = False
-initial_epoch = 6
-num_epochs = 10
+initial_epoch = 26
+num_epochs = 27
 num_train_sets = 9
 loss_order = 2
 batch_size = BATCH_SIZE
@@ -49,8 +49,8 @@ else:
     num_targets = 2
 
 SE3_advantage = 1.0;
-a = 100.0;
-b = 1.0;
+a = 1.0;
+b = 100.0;
 a1 = a/(1+SE3_advantage);
 a2 = SE3_advantage*a1;
 b1 = b/(1+SE3_advantage)
@@ -969,8 +969,8 @@ if __name__ == '__main__':
                 break;          
         model.save('../mdl/model_elu_{}_epochs.h5'.format(i+1))
         model.save_weights('../mdl/model_elu_weights_{}_epochs.hdf5'.format(i+1))
-        train_losses_np = np.array(train_losses)
-        test_losses_np = np.array(test_losses)
+        train_losses_np = np.array(train_losses[-train_iters_per_epoch:])
+        test_losses_np = np.array(test_losses[-test_iters_per_epoch:])
         testlossfile = open("test_losses_append.txt",'a')
         trainlossfile = open("train_losses_append.txt",'a')
         np.savetxt(testlossfile,test_losses_np)
