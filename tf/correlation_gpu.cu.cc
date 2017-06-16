@@ -71,7 +71,10 @@ __global__ void CorrelationKernel(const float* a, const float*b,float* out, cons
 
 
 void CorrelationKernelLauncher(const float* a, const float*b,float* out, const int batch_size,const int num_rows, const int num_cols, const int depth,const int num_offsets, const int* offset_list) {
-  CorrelationKernel<<<32, 256>>>(a, b, out,batch_size,num_rows,num_cols,depth,num_offsets,offset_list);
+  int *offset_array;
+  cudaMalloc(&offset_array, num_offsets * sizeof(int)); 
+  cudaMemcpy(offset_array, offset_list, num_offsets*sizeof(int), cudaMemcpyHostToDevice);
+  CorrelationKernel<<<32, 256>>>(a, b, out,batch_size,num_rows,num_cols,depth,num_offsets,offset_array);
 }
 
 #endif

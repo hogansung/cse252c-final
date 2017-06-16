@@ -86,7 +86,10 @@ __global__ void CorrelationGradKernel(const float* a, const float*b,const float*
 
 
 void CorrelationGradKernelLauncher(const float* a, const float*b, const float*grad, float* out_a,float*out_b, const int batch_size,const int num_rows, const int num_cols, const int depth,const int num_offsets, const int* offset_list) {
-  CorrelationGradKernel<<<32, 256>>>(a, b, grad, out_a,out_b,batch_size,num_rows,num_cols,depth,num_offsets,offset_list);
+  int *offset_array;
+  cudaMalloc(&offset_array, num_offsets * sizeof(int)); 
+  cudaMemcpy(offset_array, offset_list, num_offsets*sizeof(int), cudaMemcpyHostToDevice);
+  CorrelationGradKernel<<<32, 256>>>(a, b, grad, out_a,out_b,batch_size,num_rows,num_cols,depth,num_offsets,offset_array);
 }
 
 #endif
