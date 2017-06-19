@@ -25,7 +25,8 @@ __global__ void CorrelationGradKernel(const float* a, const float*b,const float*
     int out1 = num_offsets;
     int out2 = num_cols * out1;
     int out3 = num_rows * out2;
-
+    /*
+    // Zero-initialize the output gradient
     for (int i = 0; i < batch_size; i++) {
         for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < num_rows; j += blockDim.x * gridDim.x) {
           for (int k = 0; k < num_cols; k++) {
@@ -36,12 +37,12 @@ __global__ void CorrelationGradKernel(const float* a, const float*b,const float*
               }
           }
         }
-    }
+    } */
 
-    for (int i = 0; i < batch_size; i++) {
+    for (int i = blockIdx.z * blockDim.z; i < batch_size; i+= blockDim.z * gridDim.z) {
         int b_root = i*three_d_size;
         for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < num_rows; j += blockDim.x * gridDim.x) {
-          for (int k = 0; k < num_cols; k++) {
+          for (int k = blockIdx.y*blockDim.y + threadIdx.y; k < num_cols; k += blockDim.y * gridDim.y) {
             int grad_root = out3*i + out2*j+out1*k;
             int a_root = three_d_size*i + two_d_size*j+one_d_size * k;
             for( int m = 0 ; m < depth; m++) {
@@ -87,9 +88,20 @@ __global__ void CorrelationGradKernel(const float* a, const float*b,const float*
 
 void CorrelationGradKernelLauncher(const float* a, const float*b, const float*grad, float* out_a,float*out_b, const int batch_size,const int num_rows, const int num_cols, const int depth,const int num_offsets, const int* offset_list) {
   int *offset_array;
-  cudaMalloc(&offset_array, num_offsets * sizeof(int)); 
-  cudaMemcpy(offset_array, offset_list, num_offsets*sizeof(int), cudaMemcpyHostToDevice);
-  CorrelationGradKernel<<<32, 256>>>(a, b, grad, out_a,out_b,batch_size,num_rows,num_cols,depth,num_offsets,offset_array);
+  cudaMalloc(&offset_array, 2*num_offsets * sizeof(int)); 
+  cudaMemcpy(offset_array, offset_list, 2*num_offsets*sizeof(int), cudaMemcpyHostToDevice);
+  size_t out_size = num_rows*num_cols*depth*sizeof(float);
+  cudaMemset(out_a,0,out_size);
+  cudaMemset(out_b,0,out_size);
+  int mx = 16;
+  int my = 16;
+  int mz = 1;
+  int nz = (batch_size + mz -1)/mz;
+  int ny = (num_cols + my - 1)/my;
+  int nx = (num_rows + mx -1)/mx;
+  dim3 blocks(nx,ny,nz);
+  dim3 threadsPerBlock(mx,my,mz);
+  CorrelationGradKernel<<<blocks, threadsPerBlock>>>(a, b, grad, out_a,out_b,batch_size,num_rows,num_cols,depth,num_offsets,offset_array);
 }
 
 #endif

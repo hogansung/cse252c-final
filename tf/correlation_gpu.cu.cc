@@ -26,9 +26,9 @@ __global__ void CorrelationKernel(const float* a, const float*b,float* out, cons
     int out2 = num_cols * out1;
     int out3 = num_rows * out2;
 
-    for (int i = 0; i < batch_size; i++) {
+    for (int i = blockIdx.z * blockDim.z; i < batch_size; i+= blockDim.z * gridDim.z) {
         for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < num_rows; j += blockDim.x * gridDim.x) {
-          for (int k = 0; k < num_cols; k++) {
+          for (int k = blockIdx.y*blockDim.y + threadIdx.y; k < num_cols; k += blockDim.y * gridDim.y) {
               for (int l =0; l < num_offsets; l++ ) {
                 int j_offset = offset_list[2*l];
                 int k_offset = offset_list[2*l+1];
@@ -72,9 +72,17 @@ __global__ void CorrelationKernel(const float* a, const float*b,float* out, cons
 
 void CorrelationKernelLauncher(const float* a, const float*b,float* out, const int batch_size,const int num_rows, const int num_cols, const int depth,const int num_offsets, const int* offset_list) {
   int *offset_array;
-  cudaMalloc(&offset_array, num_offsets * sizeof(int)); 
-  cudaMemcpy(offset_array, offset_list, num_offsets*sizeof(int), cudaMemcpyHostToDevice);
-  CorrelationKernel<<<32, 256>>>(a, b, out,batch_size,num_rows,num_cols,depth,num_offsets,offset_array);
+  cudaMalloc(&offset_array, 2*num_offsets * sizeof(int)); 
+  cudaMemcpy(offset_array, offset_list, 2*num_offsets*sizeof(int), cudaMemcpyHostToDevice);
+  int mx = 16;
+  int my = 16;
+  int mz = 1;
+  int nz = (batch_size + mz -1)/mz;
+  int ny = (num_cols + my - 1)/my;
+  int nx = (num_rows + mx -1)/mx;
+  dim3 blocks(nx,ny,nz);
+  dim3 threadsPerBlock(mx,my,mz);
+  CorrelationKernel<<<blocks, threadsPerBlock>>>(a, b, out,batch_size,num_rows,num_cols,depth,num_offsets,offset_array);
 }
 
 #endif

@@ -289,7 +289,7 @@ void CorrelationFlatKernel(const float* a, const float*b,float* out, const int b
                 }
                 int a_root = three_d_size*i + two_d_size*j+one_d_size * k;
                 int out_index = out3*i + out2*j+out1*k + l;
-                out[out_index] =-20 ;
+                out[out_index] =0 ;
                 if( j >= min_j && j < max_j  && k >= min_k && k < max_k)
                 {
                     int b_j = j+j_offset;
